@@ -7,7 +7,7 @@ export async function b24(method, params = {}) {
 
 export async function profile() {
   const result = await b24('profile');
-  if (!result || !Number(result.ID)) throw new Error('Не удалось определить пользователя BZShow');
+  if (!result || !Number(result.ID)) throw new Error('Не удалось определить пользователя Битрикс24');
   return {
     id: Number(result.ID), name: [result.NAME, result.LAST_NAME].filter(Boolean).join(' '),
     timeZone: result.TIME_ZONE || 'Europe/Moscow',

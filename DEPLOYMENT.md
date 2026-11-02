@@ -14,7 +14,7 @@ instance or other users' calendars.
 ## Configuration
 
 Install dependencies with `npm ci`. Create a private `.env` using `.env.example`
-as a template and configure your application URL, portal, application code,
+as a template and configure your application URL, application code,
 OAuth client ID and OAuth client secret. Generate a random 32-byte base64 value
 for `ENCRYPTION_KEY`, for example:
 
@@ -23,9 +23,10 @@ openssl rand -base64 32
 ```
 
 Keep `.env` readable only by the service user. Do not commit it or any runtime
-data. The deployment currently restricts all users to the configured
-`BITRIX_PORTAL`; the fallback portal and branding are specific to the original
-private installation. Use your own application registration and configuration.
+data. The portal and REST endpoint are determined by the installation OAuth
+response, not a global portal setting. Use your own application registration
+and configuration. `BITRIX_PORTAL`, if retained in an older deployment, is only
+a migration hint for records created before multi-portal support.
 
 Run the server behind an HTTPS reverse proxy:
 
@@ -41,8 +42,13 @@ for the service user.
 
 ## Authorization And Data
 
-The application verifies the Bitrix24 portal, application code and user profile
-at launch. It uses the launching user's OAuth identity, not an incoming webhook.
+The application exchanges the launch refresh token with the fixed Bitrix24
+OAuth server to verify the member ID and HTTPS REST endpoint before making
+portal requests. It then verifies the application code and user profile. Each
+account stores its own verified portal and endpoint. Public custom-domain
+portals are supported; local/private IP destinations and REST redirects are
+rejected. DNS resolution is checked and pinned when establishing each HTTPS
+connection. It uses the launching user's OAuth identity, not an incoming webhook.
 Settings, Apple app-specific passwords, OAuth tokens and event mappings are
 stored per user in `runtime/accounts/*.enc`, encrypted using AES-256-GCM.
 

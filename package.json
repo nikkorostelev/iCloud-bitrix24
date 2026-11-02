@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "ical.js": "^2.2.1",
-    "tsdav": "^2.5.0"
+    "ipaddr.js": "^2.5.0",
+    "tsdav": "^2.5.0",
+    "undici": "^7.30.1"
   }
 }

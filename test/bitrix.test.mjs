@@ -25,11 +25,15 @@ test('encrypted settings detect tampering', () => {
 test('OAuth verifies app and derives user identity; settings are isolated', async t => {
   let code = 'test.icloud';
   let refreshCalls = 0;
+  const destinations=[];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     if (url.includes('/oauth/token')) {
       refreshCalls++;
-      return { ok: true, json: async () => ({ access_token: 'renewed', refresh_token: 'rotated', expires_in: 3600, member_id: 'member' }) };
+      const token=options.body.get('refresh_token');
+      const other=token==='other-portal', second=token==='second-refresh';
+      return { ok: true, json: async () => ({ access_token: second ? 'second' : 'renewed', refresh_token: 'rotated', expires_in: 3600, member_id: other ? 'other-member' : 'member',user_id:second ? 2 : 1,client_endpoint:`https://${other ? 'delovayasreda' : 'bazabzshow'}.bitrix24.ru/rest/` }) };
     }
+    destinations.push(new URL(url).hostname);
     const body = JSON.parse(options.body);
     return { ok: true, json: async () => ({ result: url.includes('app.info') ? { CODE: code } : { ID: body.auth === 'second' ? '2' : '1', NAME: 'Test' } }) };
   });
@@ -38,14 +42,22 @@ test('OAuth verifies app and derives user identity; settings are isolated', asyn
   code = 'different.app'; await assert.rejects(acceptLaunch(launch)); code = 'test.icloud';
   const firstToken = await acceptLaunch(launch);
   const first = await sessionAccount({ headers: { authorization: `Bearer ${firstToken}` } });
-  const second = await sessionAccount({ headers: { authorization: `Bearer ${await acceptLaunch({ ...launch, AUTH_ID: 'second' })}` } });
+  const second = await sessionAccount({ headers: { authorization: `Bearer ${await acceptLaunch({ ...launch, AUTH_ID: 'second', REFRESH_ID:'second-refresh' })}` } });
   assert.equal(first.user.id, 1); assert.equal(second.user.id, 2);
   await context.run(first, () => saveConfig({ ...first.config, appleEmail: 'one@example.com' }));
   assert.equal(await context.run(second, async () => (await getConfig()).appleEmail), undefined);
   assert.equal((await readAccount(first.id)).config.appleEmail, 'one@example.com');
+  const other=await sessionAccount({headers:{authorization:`Bearer ${await acceptLaunch({...launch,DOMAIN:'delovayasreda.bitrix24.ru',REFRESH_ID:'other-portal',member_id:'other-member'})}`}});
+  assert.equal(other.user.id,1);
+  assert.equal(other.portal,'delovayasreda.bitrix24.ru');
+  assert.notEqual(other.id,first.id);
+  assert.equal(other.config.appleEmail,undefined);
+  await context.run(other,()=>oauthCall('profile'));
+  assert.equal(destinations.at(-1),'delovayasreda.bitrix24.ru');
+  const beforeRefresh=refreshCalls;
   first.oauth.expiresAt = 0;
   await context.run(first, () => Promise.all([oauthCall('profile'), oauthCall('profile')]));
-  assert.equal(refreshCalls, 1);
+  assert.equal(refreshCalls-beforeRefresh, 1);
   assert.equal((await readAccount(first.id)).oauth.refreshToken, 'rotated');
   assert.equal(await sessionAccount({ headers: {} }), null);
   assert.equal(await sessionAccount({headers:{authorization:`Bearer ${firstToken.slice(0,-1)}!`}}),null);

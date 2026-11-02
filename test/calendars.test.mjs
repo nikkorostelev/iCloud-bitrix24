@@ -96,6 +96,8 @@ test('calendar event callbacks authenticate account, portal and event type',()=>
   assert.ok(validCallback(id,secret,fields,{memberId:'test'}));
   assert.ok(!validCallback(id,'a'.repeat(64),fields,{memberId:'test'}));
   assert.ok(!validCallback(id,secret,{...fields,'auth[member_id]':'other'},{memberId:'test'}));
+  assert.ok(!validCallback(id,secret,fields,{memberId:'test',portal:'delovayasreda.bitrix24.ru'}));
+  assert.ok(validCallback(id,secret,{...fields,'auth[domain]':'delovayasreda.bitrix24.ru'},{memberId:'test',portal:'delovayasreda.bitrix24.ru'}));
 });
 
 test('identical events in different calendars are routed to their own counterpart and retain separate state', async()=>{

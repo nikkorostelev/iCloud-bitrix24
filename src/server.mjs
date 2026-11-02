@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { root, context, account, saveAccount, getApplePassword } from './config.mjs';
-import { acceptLaunch, sessionAccount, loadedAccount, portal } from './auth.mjs';
+import { acceptLaunch, sessionAccount, loadedAccount, portalOf } from './auth.mjs';
 import { profile, sections } from './bitrix.mjs';
 import { appleClient, appleCalendars, normalizeApplePassword } from './icloud.mjs';
 import { disconnectPreview, disconnectApple } from './connection.mjs';
@@ -12,9 +12,10 @@ import { pollSeconds, bindEvents, callbackUrl, validCallback, enqueue, startBack
 
 const port = Number(process.env.PORT || 8766);
 const origin = process.env.APP_URL || `http://127.0.0.1:${port}`;
-function response(res, status, body, type = 'application/json; charset=utf-8') {
+function response(res, status, body, type = 'application/json; charset=utf-8', framePortal = null) {
+  const embeddingPortal=context.getStore()?.portal || framePortal;
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
-    'referrer-policy': 'no-referrer', 'content-security-policy': `frame-ancestors https://${portal}` });
+    'referrer-policy': 'no-referrer', 'content-security-policy': `frame-ancestors ${embeddingPortal ? `https://${embeddingPortal}` : "'none'"}` });
   res.end(type.startsWith('application/json') ? JSON.stringify(body) : body);
 }
 async function requestBody(req) {
@@ -52,18 +53,22 @@ export async function handle(req, res) {
     }
     if (req.method === 'POST' && ['/', '/install'].includes(url.pathname)) {
       const fields = Object.fromEntries(new URLSearchParams(await requestBody(req)));
-      fields.DOMAIN ||= url.searchParams.get('DOMAIN');
+      fields.DOMAIN ||= fields['auth[domain]'] || url.searchParams.get('DOMAIN');
+      fields.AUTH_ID ||= fields['auth[access_token]'];
+      fields.REFRESH_ID ||= fields['auth[refresh_token]'];
+      fields.member_id ||= fields['auth[member_id]'];
       const token = await acceptLaunch(fields);
+      const launched=await sessionAccount({headers:{authorization:`Bearer ${token}`}});
       let html = await readFile(resolve(root, 'public/index.html'), 'utf8');
       html = html.replace('<!-- SESSION -->', `<meta name="session-token" content="${token}"><meta name="installation" content="${url.pathname === '/install'}">`);
-      return response(res, 200, html, 'text/html; charset=utf-8');
+      return response(res, 200, html, 'text/html; charset=utf-8',portalOf(launched));
     }
     if (req.method === 'GET' && ['/', '/install'].includes(url.pathname)) return response(res, 200,
-      '<!doctype html><html lang="ru"><meta charset="utf-8"><title>BZShow · iCloud</title><p>Откройте приложение «iCloud Календарь» из меню BZShow.</p></html>', 'text/html; charset=utf-8');
+      '<!doctype html><html lang="ru"><meta charset="utf-8"><title>iCloud · Битрикс24</title><p>Откройте приложение «iCloud Календарь» из меню вашего Битрикс24.</p></html>', 'text/html; charset=utf-8');
     const assets = { '/app.js': 'text/javascript', '/styles.css': 'text/css', '/auto.css': 'text/css' };
     if (req.method === 'GET' && assets[url.pathname]) return response(res, 200, await readFile(resolve(root, `public${url.pathname}`), 'utf8'), `${assets[url.pathname]}; charset=utf-8`);
     const userAccount = await sessionAccount(req);
-    if (!userAccount) return response(res, 401, { error: 'Сессия истекла. Откройте приложение заново из BZShow' });
+    if (!userAccount) return response(res, 401, { error: 'Сессия истекла. Откройте приложение заново из Битрикс24' });
     if (req.method === 'POST' && req.headers.origin && req.headers.origin !== origin) return response(res, 403, { error: 'Неверный источник запроса' });
     return await context.run(userAccount, async () => {
       const value = account(), config = value.config;
@@ -84,7 +89,7 @@ export async function handle(req, res) {
           appleName: calendars.find(c => c.url === link.appleUrl)?.name || link.appleName || 'Недоступен',
           available: list.some(c => c.id === link.bitrixId) && calendars.some(c => c.url === link.appleUrl),
         }));
-        return response(res, 200, { ...progress(), portal, sections: list, calendars, calendarLinks: links,
+        return response(res, 200, { ...progress(), portal:portalOf(value), sections: list, calendars, calendarLinks: links,
           bitrixReady: !!bitrixUser && !bitrixError, bitrixUser, bitrixError, appleError,
           appleEmail: config.appleEmail || '', appleReady: !!getApplePassword(config.appleEmail), horizonDays: config.horizonDays || 30, pendingBitrixIds: config.pendingBitrixIds || [] });
       }
@@ -130,6 +135,8 @@ export async function handle(req, res) {
     });
   } catch (error) { response(res, 400, { error: error.message }); }
 }
-const server = createServer(handle);
-server.listen(port, '127.0.0.1', () => console.log(`BZShow iCloud Sync v2: http://127.0.0.1:${port}`));
-startBackground();
+if (process.env.NODE_ENV !== 'test') {
+  const server = createServer(handle);
+  server.listen(port, '127.0.0.1', () => console.log(`Bitrix24 iCloud Sync: http://127.0.0.1:${port}`));
+  startBackground();
+}

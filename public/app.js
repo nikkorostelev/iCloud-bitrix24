@@ -7,10 +7,10 @@ let disconnectToken = '';
 $('show-apple-password').onchange = event => { $('apple-password').type = event.target.checked ? 'text' : 'password'; };
 function notice(message, kind = 'error') { $('notice').textContent = message; $('notice').className = `notice ${kind}`; $('notice').hidden = !message; }
 async function api(path, body) {
-  if (sessionExpired) throw new Error('Сессия истекла. Откройте приложение заново из BZShow');
+  if (sessionExpired) throw new Error('Сессия истекла. Откройте приложение заново из Битрикс24');
   const response = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, ...(body ? { body: JSON.stringify(body) } : {}) });
   if (response.status === 401) sessionExpired = true;
-  if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Сервис временно недоступен. Повторите позже или откройте приложение заново из BZShow.');
+  if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Сервис временно недоступен. Повторите позже или откройте приложение заново из Битрикс24.');
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
@@ -36,7 +36,7 @@ function calendarName(name, color) {
 function renderCalendars() {
   const data = statusData;
   const links = data.calendarLinks;
-  $('calendar-counts').textContent = `iCloud: ${data.appleError ? 'недоступен' : data.calendars.length} · BZShow: ${data.bitrixError ? 'недоступен' : data.sections.length} · Связей: ${links.length}${data.pendingBitrixIds?.length ? ` · Ожидают подключения: ${data.pendingBitrixIds.length}` : ''}`;
+  $('calendar-counts').textContent = `iCloud: ${data.appleError ? 'недоступен' : data.calendars.length} · Битрикс24: ${data.bitrixError ? 'недоступен' : data.sections.length} · Связей: ${links.length}${data.pendingBitrixIds?.length ? ` · Ожидают подключения: ${data.pendingBitrixIds.length}` : ''}`;
   const unavailable = !!(data.appleError || data.bitrixError || !data.appleReady);
   $('config-form').querySelector('button[type="submit"]').disabled = !data.bitrixReady;
   $('select-bitrix').disabled = !data.bitrixReady;
@@ -72,6 +72,7 @@ async function loadStatus() {
   loading = true;
   try {
     const data = await api('/api/status'); statusData = data;
+    $('portal-domain').textContent = data.portal;
     $('apple-email').value = data.appleEmail; $('horizon-days').value = data.horizonDays;
     $('disconnect-apple').hidden = !data.appleReady;
     $('bitrix-identity').textContent = data.bitrixReady ? `Подключён: ${data.bitrixUser.name} · ID ${data.bitrixUser.id}` : 'Пользователь не подключён';
@@ -92,12 +93,12 @@ function additions() {
   }
   return result;
 }
-const actionLabel = kind => ({ link:'Связать', createApple:'В iCloud', createBitrix:'В BZShow', updateApple:'Обновить iCloud', updateBitrix:'Обновить BZShow', conflict:'Конфликт', skip:'Пропустить' })[kind] || kind;
+const actionLabel = kind => ({ link:'Связать', createApple:'В iCloud', createBitrix:'В Битрикс24', updateApple:'Обновить iCloud', updateBitrix:'Обновить Битрикс24', conflict:'Конфликт', skip:'Пропустить' })[kind] || kind;
 async function preview() {
   if (dirty) throw new Error('Сначала сохраните выбор календарей');
   previewToken = ''; $('run-button').disabled = true;
   const data = await api('/api/preview'); previewToken = data.previewToken;
-  $('counts').textContent = `BZShow: ${data.bitrixCount} · iCloud: ${data.appleCount} · действий: ${data.actions.filter(a=>!['skip','conflict'].includes(a.kind)).length}`;
+  $('counts').textContent = `Битрикс24: ${data.bitrixCount} · iCloud: ${data.appleCount} · действий: ${data.actions.filter(a=>!['skip','conflict'].includes(a.kind)).length}`;
   const rows = data.actions.map(action => { const tr = el('tr',null,action.kind); for (const text of [actionLabel(action.kind),action.calendarName,action.title,action.start ? new Date(action.start).toLocaleString('ru-RU') : '',action.reason || '']) tr.append(el('td',text)); return tr; });
   if (!rows.length) { const tr = el('tr'), td = el('td','Изменений нет','empty'); td.colSpan = 5; tr.append(td); rows.push(tr); }
   $('actions').replaceChildren(...rows); $('run-button').disabled = false;

@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {randomBytes} from 'node:crypto';
+import {once} from 'node:events';
+const directory=await mkdtemp(`${tmpdir()}/icloud-install-`);
+process.env.DATA_DIR=directory;
+process.env.NODE_ENV='test';
+process.env.ENCRYPTION_KEY=randomBytes(32).toString('base64');
+process.env.BITRIX_APP_CODE='test.icloud';
+process.env.BITRIX_CLIENT_ID='client';
+process.env.BITRIX_CLIENT_SECRET='secret';
+const {handle}=await import('../src/server.mjs');
+const {sessionAccount}=await import('../src/auth.mjs');
+test.after(()=>rm(directory,{recursive:true,force:true}));
+test('installation on a second portal embeds only in its verified portal and keeps user settings separate',async t=>{
+  const clientFetch=globalThis.fetch;
+  let domain='delovayasreda.bitrix24.ru',member='second-member';
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    if(url.includes('/oauth/token/'))return {ok:true,json:async()=>({access_token:'access',refresh_token:'refresh',member_id:member,user_id:1,client_endpoint:`https://${domain}/rest/`,expires_in:3600})};
+    return {ok:true,json:async()=>({result:url.includes('app.info')?{CODE:'test.icloud'}:{ID:'1',NAME:'User'}})};
+  });
+  const server=createServer(handle);
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const endpoint=`http://127.0.0.1:${server.address().port}`;
+  const install=async()=>{
+    const response=await clientFetch(`${endpoint}/install`,{method:'POST',body:new URLSearchParams({DOMAIN:domain,AUTH_ID:'access',REFRESH_ID:'refresh',member_id:member})});
+    const html=await response.text();
+    assert.equal(response.status,200,html);
+    assert.equal(response.headers.get('content-security-policy'),`frame-ancestors https://${domain}`);
+    const token=/name="session-token" content="([^"]+)"/.exec(html)?.[1];
+    assert.ok(token);
+    return sessionAccount({headers:{authorization:`Bearer ${token}`}});
+  };
+  const first=await install();
+  first.config.appleEmail='first-private@example.com';
+  domain='crm.example.org';member='custom-member';
+  const second=await install();
+  assert.equal(second.portal,'crm.example.org');
+  assert.notEqual(first.id,second.id);
+  assert.equal(second.config.appleEmail,undefined);
+});

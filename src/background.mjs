@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { account, accountIds, context, saveAccount } from './config.mjs';
-import { loadedAccount, oauthCall, portal } from './auth.mjs';
+import { loadedAccount, oauthCall, portalOf } from './auth.mjs';
 import { isBusy, runSync } from './sync.mjs';
 import { calendarLinks } from './calendars.mjs';
 
@@ -19,7 +19,7 @@ const secretFor = id => createHmac('sha256', process.env.ENCRYPTION_KEY).update(
 export function callbackUrl(id) { return `${process.env.APP_URL}/events/${id}/${secretFor(id)}`; }
 export function validCallback(id, secret, fields, value) {
   if (!/^[a-f0-9]{64}$/.test(secret) || !timingSafeEqual(Buffer.from(secret), Buffer.from(secretFor(id)))) return false;
-  return fields['auth[domain]'] === portal && fields['auth[member_id]'] === value.memberId
+  return fields['auth[domain]'] === portalOf(value) && fields['auth[member_id]'] === value.memberId
     && ['ONCALENDARENTRYADD', 'ONCALENDARENTRYUPDATE', 'ONCALENDARENTRYDELETE'].includes(fields.event?.toUpperCase());
 }
 export async function bindEvents() {
