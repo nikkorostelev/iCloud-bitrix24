@@ -1,0 +1,14 @@
+{
+  "name": "bzshow-icloud-sync",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "install:server": "node scripts/install-server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ical.js": "^2.2.1",
+    "tsdav": "^2.5.0"
+  }
+}

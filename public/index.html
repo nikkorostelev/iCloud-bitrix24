@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- SESSION -->
+  <title>BZShow · iCloud календарь</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/auto.css">
+  <script src="https://api.bitrix24.com/api/v1/"></script>
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brandmark">BZ</span><span>BZShow <small>Календарь</small></span></div>
+    <span id="status" class="status">Проверка соединений...</span>
+  </header>
+  <main>
+    <div class="pagehead">
+      <div><p class="eyebrow">Личные календари</p><h1>Bitrix24 ↔ iCloud</h1></div>
+      <p class="subhead">BZShow · iCloud Календарь</p>
+    </div>
+
+    <div id="notice" class="notice" hidden></div>
+
+    <section class="band">
+      <div class="sectionhead"><span class="number">1</span><div><h2>BZShow</h2></div></div>
+      <p id="bitrix-identity" class="hint">Пользователь не подключён</p>
+    </section>
+
+    <section class="band">
+      <div class="sectionhead"><span class="number">2</span><div><h2>Подключение Apple</h2><p>Используйте отдельный пароль приложения Apple.</p></div></div>
+      <form id="apple-form" class="formrow">
+        <label>Apple ID <input id="apple-email" type="email" autocomplete="username" placeholder="name@icloud.com" required></label>
+        <label>Пароль для приложения <input id="apple-password" type="password" autocomplete="new-password" placeholder="xxxx-xxxx-xxxx-xxxx" required></label>
+        <button type="submit">Подключить iCloud</button>
+      </form>
+      <label class="password-visibility"><input id="show-apple-password" type="checkbox" aria-controls="apple-password">Показать пароль</label>
+      <button id="disconnect-apple" type="button" class="secondary" hidden>Удалить подключение iCloud</button>
+      <p class="hint">Создать пароль: <a href="https://account.apple.com/" target="_blank" rel="noreferrer">Apple Account</a> → Вход и безопасность → Пароли приложений. Не вводите основной пароль Apple ID.</p>
+    </section>
+
+    <section class="band">
+      <div class="sectionhead"><span class="number">3</span><div><h2>Календари</h2><p id="calendar-counts">Загрузка календарей...</p></div></div>
+      <form id="config-form">
+        <div class="tablewrap"><table class="calendar-table"><thead><tr><th>Синхронизация</th><th>BZShow</th><th>iCloud</th></tr></thead><tbody id="calendar-links"></tbody></table></div>
+        <div class="calendar-sources">
+          <section><div class="source-head"><h3>Из iCloud в Битрикс24</h3><button type="button" class="secondary" id="select-apple">Выбрать все</button></div><div id="apple-sources" class="source-list"></div></section>
+          <section><div class="source-head"><h3>Из Битрикс24 в iCloud</h3><button type="button" class="secondary" id="select-bitrix">Выбрать все</button></div><div id="bitrix-sources" class="source-list"></div></section>
+        </div>
+        <div class="formrow calendar-save">
+          <label class="narrow">Вперёд, дней <input id="horizon-days" type="number" min="1" max="365" value="30" required></label>
+          <button type="submit">Сохранить календари</button>
+          <button type="button" class="secondary" id="refresh-calendars">Обновить список</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="band">
+      <div class="sectionhead"><span class="number">4</span><div><h2>Предпросмотр</h2><p>Сначала только чтение. Ничего не изменится, пока вы не нажмёте запуск.</p></div></div>
+      <div class="toolbar">
+        <button id="preview-button" type="button" class="secondary">Показать изменения</button>
+        <span id="counts" class="muted"></span>
+      </div>
+      <div class="tablewrap"><table><thead><tr><th>Действие</th><th>Календарь</th><th>Событие</th><th>Когда</th><th>Примечание</th></tr></thead><tbody id="actions"><tr><td colspan="5" class="empty">Выберите календари для предпросмотра</td></tr></tbody></table></div>
+      <div class="footerbar"><p>Удаления, события на весь день, повторы и приглашения автоматически не обрабатываются. Конфликты пропускаются.</p><button id="run-button" type="button" disabled>Запустить и включить авто</button></div>
+    </section>
+
+    <section class="band history"><div class="sectionhead"><span class="number">5</span><div><h2>Работа в фоне</h2><p id="last-run">Запусков пока не было</p></div></div><label class="auto-row"><input id="auto-enabled" type="checkbox" disabled><span>Автоматическая синхронизация</span></label><p class="hint" id="sync-mode"></p><p class="hint" id="sync-summary"></p><p id="auto-error" class="auto-error" hidden></p><ul id="results"></ul></section>
+  </main>
+  <dialog id="disconnect-dialog">
+    <h2>Отключение iCloud</h2>
+    <p>Обмен остановится, сохранённый пароль и связи событий будут удалены. Календари в Apple останутся.</p>
+    <label class="disconnect-option"><input id="delete-imported-calendars" type="checkbox">Удалить созданные приложением календари iCloud из Битрикса</label>
+    <ul id="disconnect-calendars"></ul>
+    <p id="disconnect-warning" class="auto-error">Будут удалены эти календари со всеми событиями, включая добавленные в них вручную. Это действие нельзя отменить из приложения.</p>
+    <p id="disconnect-preserved"></p>
+    <div class="dialog-actions"><button id="disconnect-cancel" type="button" class="secondary">Отмена</button><button id="disconnect-confirm" type="button">Отключить</button></div>
+  </dialog>
+</body>
+</html>
