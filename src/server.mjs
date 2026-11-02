@@ -8,7 +8,7 @@ import { appleClient, appleCalendars, normalizeApplePassword } from './icloud.mj
 import { disconnectPreview, disconnectApple } from './connection.mjs';
 import { calendarLinks, configureCalendars, saveDeferredPreferences } from './calendars.mjs';
 import { snapshot, previewSignature, runSync, exclusive, isBusy } from './sync.mjs';
-import { pollSeconds, bindEvents, callbackUrl, validCallback, enqueue, startBackground, autoWaitingReason } from './background.mjs';
+import { pollSeconds, fullScanSeconds, bindEvents, callbackUrl, validCallback, enqueue, startBackground, autoWaitingReason } from './background.mjs';
 
 const port = Number(process.env.PORT || 8766);
 const origin = process.env.APP_URL || `http://127.0.0.1:${port}`;
@@ -35,6 +35,7 @@ function progress() {
     lastResults: state.lastResults || [], conflicts: state.lastConflicts || 0, skipped: state.lastSkipped || 0,
     initializedLinks: state.initializedLinks || {},
     syncProgress: state.syncProgress || null,
+    fullScanSeconds, lastCheckDurationMs: state.lastCheckDurationMs ?? null,
   };
 }
 export async function handle(req, res) {
@@ -49,7 +50,7 @@ export async function handle(req, res) {
       const value = await loadedAccount(match[1]);
       if (!validCallback(match[1], match[2], fields, value)) return response(res, 403, { error: 'Forbidden' });
       value.state.lastEventReceived = new Date().toISOString();
-      enqueue(value);
+      enqueue(value, 200, {eventId:fields['data[id]'],forceFull:!/^\d+$/.test(fields['data[id]'] || '')});
       return response(res, 200, { ok: true });
     }
     if (req.method === 'POST' && ['/', '/install'].includes(url.pathname)) {
@@ -102,7 +103,10 @@ export async function handle(req, res) {
         if (calendarLinks(config).length && config.appleEmail && config.appleEmail !== email) throw new Error('Для смены Apple ID сначала нужна отдельная настройка связей календарей');
         const calendars = await appleCalendars(await appleClient(email, password), true);
         value.applePassword = password; config.appleEmail = email;
+        value.state.nextRetryAt = 0; value.state.failureCount = 0;
+        value.state.lastAutoError = null; value.state.lastAutoErrorCode = null;
         await saveAccount(value);
+        enqueue(value, 0, {forceFull:true});
         return response(res, 200, { count: calendars.length });
       });
       if (req.method === 'POST' && url.pathname === '/api/config') return exclusive(async () => {
@@ -129,7 +133,7 @@ export async function handle(req, res) {
         config.autoEnabled = enabled;
         value.state.nextRetryAt = 0;
         await saveAccount(value);
-        if (enabled) { if (!autoWaitingReason(value)) await bindEvents(); enqueue(value, 0); }
+        if (enabled) { if (!autoWaitingReason(value)) await bindEvents(); enqueue(value, 0, {forceFull:true}); }
         return response(res, 200, progress());
       }
       return response(res, 404, { error: 'Не найдено' });

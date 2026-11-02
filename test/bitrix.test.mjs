@@ -82,4 +82,12 @@ test('OAuth verifies app and derives user identity; settings are isolated', asyn
   assert.equal(eventBody.from, undefined);
   assert.equal(eventBody.section, 22);
   assert.equal(normalizeBitrix({ID:1, DATE_FROM:'02.11.2026 18:00:00', DATE_TO:'02.11.2026 19:00:00', TZ_OFFSET_FROM:'10800', TZ_OFFSET_TO:'10800', DATE_FROM_TS_UTC:String(start/1000-10800)}).start, start);
+  t.mock.method(globalThis,'fetch',async(_url,options)=>{
+    eventBody=JSON.parse(options.body);
+    return {ok:true,json:async()=>({result:[{ID:'a',SECTION_ID:'22'},{ID:'b',SECTION_ID:'23'},{ID:'foreign',SECTION_ID:'99'}]})};
+  });
+  const {events}=await import('../src/bitrix.mjs');
+  const rows=await context.run(first,()=>events(['22','23'],'2026-10-26','2026-12-03'));
+  assert.deepEqual(eventBody.section,[22,23]);
+  assert.deepEqual(rows.map(e=>e.ID),['a','b']);
 });

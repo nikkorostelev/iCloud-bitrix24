@@ -22,29 +22,30 @@ export function previewSignature(data) {
     })), pairs: account().state.pairs,
   })).digest('hex');
 }
-export async function snapshot() {
+export async function snapshot({linkIds, revisions} = {}) {
   const value = account();
-  const links = calendarLinks(value.config).filter(link => link.enabled);
+  const links = calendarLinks(value.config).filter(link => link.enabled && (!linkIds || linkIds.includes(link.id)));
   if (!links.length) throw new Error('Выберите календари для синхронизации');
   const data = await inventory();
   const from = Date.now() - 7 * 86400000;
   const to = Date.now() + (value.config.horizonDays || 30) * 86400000;
+  const bitrixEvents = await events(links.map(link=>link.bitrixId), new Date(from).toISOString().slice(0,10), new Date(to).toISOString().slice(0,10));
   const groups = [];
-  for (const link of links) {
-    value.state.syncProgress = { phase: 'reading', calendarName: link.bitrixName, calendarsDone: groups.length, calendarsTotal: links.length, from, to };
+  for (let offset=0; offset<links.length; offset+=3) {
+    const batch = await Promise.all(links.slice(offset,offset+3).map(async (link, index) => {
+    value.state.syncProgress = { phase: 'reading', calendarName: link.bitrixName, calendarsDone: offset+index, calendarsTotal: links.length, from, to };
     const calendar = data.apple.find(c => c.url === link.appleUrl);
     const section = data.bitrix.find(c => c.id === link.bitrixId);
     if (!calendar || !section) throw new Error(`Календарь недоступен: ${link.bitrixName || link.appleName || link.id}`);
-    const [b, a] = await Promise.all([
-      events(link.bitrixId, new Date(from).toISOString().slice(0,10), new Date(to).toISOString().slice(0,10)),
-      appleObjects(data.client, calendar, from, to),
-    ]);
-    const bitrix = b.map(normalizeBitrix).filter(e => e.end >= from && e.start <= to);
+    const a = await appleObjects(data.client, calendar, from, to, revisions?.[calendar.url]);
+    const bitrix = bitrixEvents.filter(e=>String(e.SECTION_ID)===link.bitrixId).map(normalizeBitrix).filter(e => e.end >= from && e.start <= to);
     const apple = a.flatMap(object => expandApple(object, from, to));
     const idsB = new Set(bitrix.map(e => e.id)), idsA = new Set(apple.map(e => e.id));
     const state = { pairs: (value.state.pairs || []).filter(pair => (pair.calendarLinkId || 'legacy') === link.id && (idsB.has(pair.bitrixId) || idsA.has(pair.appleUrl))) };
     const actions = plan(bitrix, apple, state).map(action => ({ ...action, calendarName: section.name, calendarLinkId: link.id }));
-    groups.push({ link, calendar, bitrix, apple, actions });
+    return { link, calendar, bitrix, apple, actions };
+    }));
+    groups.push(...batch);
   }
   return { client: data.client, groups, actions: groups.flatMap(g => g.actions), bitrixCount: groups.reduce((n,g)=>n+g.bitrix.length,0), appleCount: groups.reduce((n,g)=>n+g.apple.length,0) };
 }
@@ -80,7 +81,7 @@ export async function runSync(expectedPreview = null, overrides = {}) {
           await saveAccount(value);
           results.push({ kind: action.kind, title: action.title, start: action.source?.start, calendarName: action.calendarName, ok: true });
         } catch (error) {
-          results.push({ kind: action.kind, title: action.title, start: action.source?.start, calendarName: action.calendarName, ok: false, error: error.message });
+          results.push({ kind: action.kind, title: action.title, start: action.source?.start, calendarName: action.calendarName, ok: false, error: error.message, code:error.code, retryAfterMs:error.retryAfterMs });
           failed = true; break;
         }
       }
@@ -89,9 +90,16 @@ export async function runSync(expectedPreview = null, overrides = {}) {
     value.state.lastRun = new Date().toISOString();
     if (results.length) value.state.lastResults = results;
     value.state.syncProgress = null;
-    value.state.lastConflicts = data.actions.filter(a => a.kind === 'conflict').length;
-    value.state.lastSkipped = data.actions.filter(a => a.kind === 'skip').length;
+    value.state.linkDiagnostics ||= {};
+    for (const group of data.groups) value.state.linkDiagnostics[group.link.id] = {
+      conflicts:group.actions.filter(a=>a.kind==='conflict').length,
+      skipped:group.actions.filter(a=>a.kind==='skip').length,
+    };
+    value.state.lastConflicts = Object.values(value.state.linkDiagnostics).reduce((n,x)=>n+x.conflicts,0);
+    value.state.lastSkipped = Object.values(value.state.linkDiagnostics).reduce((n,x)=>n+x.skipped,0);
     value.state.lastAutoError = results.find(r => !r.ok)?.error || null;
+    value.state.lastAutoErrorCode = results.find(r => !r.ok)?.code || null;
+    value.state.retryAfterMs = results.find(r => !r.ok)?.retryAfterMs || 0;
     if (!value.state.lastAutoError) value.state.lastSuccess = value.state.lastRun;
     await saveAccount(value);
     return { results, conflicts: value.state.lastConflicts, skipped: value.state.lastSkipped };

@@ -34,10 +34,16 @@ export async function deleteBitrixCalendar(id) {
 
 export async function events(sectionId, from, to) {
   const user = account().user;
+  const ids = new Set((Array.isArray(sectionId) ? sectionId : [sectionId]).map(String));
   const result = await b24('calendar.event.get', {
-    type: 'user', ownerId: user.id, section: [Number(sectionId)], from, to,
+    type: 'user', ownerId: user.id, section: [...ids].map(Number), from, to,
   });
-  return result.filter(event => String(event.SECTION_ID) === String(sectionId));
+  return result.filter(event => ids.has(String(event.SECTION_ID)));
+}
+
+export async function eventSection(id) {
+  const event = await b24('calendar.event.getbyid', {id:Number(id)});
+  return event?.SECTION_ID == null ? null : String(event.SECTION_ID);
 }
 
 function eventTimestamp(event, edge) {

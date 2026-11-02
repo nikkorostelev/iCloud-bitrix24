@@ -24,6 +24,14 @@ export async function icloudFetch(input, init = {}) {
     if (url.protocol !== 'https:' || !/^(caldav|p\d+-caldav)\.icloud\.com$/.test(url.hostname) || url.port || url.username || url.password) throw new Error('Недоверенный адрес CalDAV iCloud');
     const response = await fetch(url, { ...init, headers, redirect: 'manual', signal: AbortSignal.timeout(30000) });
     if (response.status === 401) { await response.body?.cancel(); throw authenticationError(); }
+    if ([429, 503].includes(response.status)) {
+      const retry = response.headers.get('retry-after');
+      const seconds = Number(retry);
+      const error = new Error(`iCloud временно ограничил запросы (HTTP ${response.status}). Обмен повторится автоматически.`);
+      error.code = 'ICLOUD_RATE_LIMITED';
+      error.retryAfterMs = Math.min(3600000, Math.max(5000, retry ? Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retry) - Date.now() || 30000 : 30000));
+      await response.body?.cancel(); throw error;
+    }
     if (![301,302,307,308].includes(response.status)) return response;
     const location = response.headers.get('location');
     if (!location) return response;
@@ -55,7 +63,7 @@ export async function appleClient(email, password = getApplePassword(email)) {
         const calendars = await client.fetchCalendars();
         calendarCache.set(client,{expiresAt:Date.now()+60000,value:calendars});
         return client;
-      } catch (error) { if (authRejected) throw authenticationError(); client.account = undefined; }
+      } catch (error) { if (authRejected) throw authenticationError(); if (error.code === 'ICLOUD_RATE_LIMITED') throw error; client.account = undefined; }
     }
     let lastError;
     for (let attempt=0;attempt<3;attempt++) {
@@ -66,7 +74,7 @@ export async function appleClient(email, password = getApplePassword(email)) {
           await saveAccount(value);
         }
         return client;
-      } catch (error) { if (authRejected) throw authenticationError(); lastError=error; if(attempt<2) await new Promise(resolve=>setTimeout(resolve,700*(attempt+1))); }
+      } catch (error) { if (authRejected) throw authenticationError(); if (error.code === 'ICLOUD_RATE_LIMITED') throw error; lastError=error; if(attempt<2) await new Promise(resolve=>setTimeout(resolve,700*(attempt+1))); }
     }
     if (/cannot find (homeUrl|principalUrl)/i.test(lastError?.message || '')) {
       throw new Error('Apple не вернул адрес календарей. Проверьте подключение и повторите позже; если ошибка сохраняется, подключите iCloud заново с паролем приложения.');
@@ -107,11 +115,35 @@ export async function appleCalendars(client, force = false) {
   return value;
 }
 
-export async function appleObjects(client, calendar, from, to) {
-  return client.fetchCalendarObjects({
+export async function appleRevisions(client) {
+  const responses = await client.propfind({url:client.account.homeUrl,depth:'1',props:{
+    'd:resourcetype':{},'cs:getctag':{},'d:sync-token':{},
+  }});
+  const revisions = {};
+  const text = value => typeof value === 'string' || typeof value === 'number' ? String(value) : value?._cdata ?? value?._text;
+  for (const response of responses) {
+    if (!response.ok || !response.href || !response.props?.resourcetype) throw new Error('iCloud не вернул состояние календарей');
+    if (!Object.hasOwn(response.props.resourcetype, 'calendar')) continue;
+    const url = new URL(response.href, client.account.rootUrl).href;
+    revisions[url] = text(response.props.syncToken) || text(response.props.getctag) || null;
+  }
+  return revisions;
+}
+
+const objectCache = new WeakMap();
+export async function appleObjects(client, calendar, from, to, revision) {
+  const cache = objectCache.get(client) || new Map();
+  const previous = cache.get(calendar.url);
+  if (revision && previous?.revision === revision && previous.from <= from && previous.to >= to) return previous.objects;
+  // Cache only revision-checked worker reads, with a day of window coverage for rolling boundaries.
+  const requestedFrom = revision ? Math.floor(from / 86400000) * 86400000 : from;
+  const requestedTo = revision ? Math.ceil(to / 86400000) * 86400000 : to;
+  const objects = await client.fetchCalendarObjects({
     calendar,
-    timeRange: { start: new Date(from).toISOString(), end: new Date(to).toISOString() },
+    timeRange: { start: new Date(requestedFrom).toISOString(), end: new Date(requestedTo).toISOString() },
   });
+  if (revision) {cache.set(calendar.url,{revision,from:requestedFrom,to:requestedTo,objects});objectCache.set(client,cache);}
+  return objects;
 }
 
 export function normalizeApple(object) {
@@ -203,6 +235,7 @@ export function icalString(event, uid = randomUUID()) {
 export async function createApple(client, calendar, event) {
   const filename = `${randomUUID()}.ics`;
   const response = await client.createCalendarObject({ calendar, filename, iCalString: icalString(event) });
+  objectCache.delete(client);
   if (!response.ok) throw new Error(`iCloud: создание события вернуло HTTP ${response.status}`);
   return new URL(filename, calendar.url).href;
 }
@@ -222,5 +255,6 @@ export async function updateApple(client, event, source) {
   const response = await client.updateCalendarObject({ calendarObject: {
     url: event.id, etag: event.etag, data: component.toString(),
   } });
+  objectCache.delete(client);
   if (!response.ok) throw new Error(`iCloud: обновление события вернуло HTTP ${response.status}`);
 }

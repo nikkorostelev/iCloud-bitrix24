@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DAVClient } from 'tsdav';
-import { icalString, normalizeApple, icloudFetch, createAppleCalendar, normalizeApplePassword, appleClient } from '../src/icloud.mjs';
+import { icalString, normalizeApple, icloudFetch, createAppleCalendar, normalizeApplePassword, appleClient, appleRevisions, appleObjects, createApple } from '../src/icloud.mjs';
 
 test('password paste accepts whitespace and typographic separators without accepting arbitrary passwords',()=>{
   assert.equal(normalizeApplePassword(' abcd\u2011efgh ijkl-mnop\n'), 'abcd-efgh-ijkl-mnop');
@@ -69,4 +69,39 @@ test('new Apple calendars are children of the home collection even without a tra
   assert.ok(url.startsWith('https://caldav.icloud.com/account/calendars/'));
   assert.equal(requested.props['d:displayname'],'Work');
   assert.equal(requested.props['ca:calendar-color'],'#123456FF');
+});
+
+test('lightweight Apple checks use one depth-one revision query and reject broken responses', async()=>{
+  let calls=0;
+  const client={account:{homeUrl:'https://caldav.icloud.com/calendars/',rootUrl:'https://caldav.icloud.com/'},propfind:async params=>{
+    calls++; assert.equal(params.depth,'1'); assert.ok(params.props['cs:getctag']);
+    return [{ok:true,href:'/calendars/',props:{resourcetype:{collection:{}}}},
+      {ok:true,href:'/calendars/work/',props:{resourcetype:{calendar:{}},getctag:{_text:'v1'}}},
+      {ok:true,href:'/calendars/family/',props:{resourcetype:{calendar:{}},syncToken:'token-v2'}},
+      {ok:true,href:'/calendars/unknown/',props:{resourcetype:{calendar:{}}}}];
+  }};
+  assert.deepEqual(await appleRevisions(client),{'https://caldav.icloud.com/calendars/work/':'v1','https://caldav.icloud.com/calendars/family/':'token-v2','https://caldav.icloud.com/calendars/unknown/':null});
+  assert.equal(calls,1);
+  client.propfind=async()=>[{ok:false,status:401}];
+  await assert.rejects(appleRevisions(client),/состояние календарей/);
+});
+
+test('Apple rate limiting honors Retry-After instead of appearing as lost authorization',async t=>{
+  t.mock.method(globalThis,'fetch',async()=>new Response('',{status:429,headers:{'retry-after':'120'}}));
+  await assert.rejects(icloudFetch('https://caldav.icloud.com/'), e=>e.code==='ICLOUD_RATE_LIMITED' && e.retryAfterMs===120000);
+});
+
+test('unchanged revisions reuse window-covered objects; previews and writes bypass or invalidate cache',async()=>{
+  let calls=0;
+  const rows=[{url:'https://caldav.icloud.com/work/test.ics',data:'test'}];
+  const client={fetchCalendarObjects:async()=>{calls++;return rows;},createCalendarObject:async()=>({ok:true})};
+  const calendar={url:'https://caldav.icloud.com/work/'};
+  const from=Date.parse('2026-11-02T12:00:00Z'),to=from+86400000;
+  assert.equal(await appleObjects(client,calendar,from,to,'v1'),rows);
+  await appleObjects(client,calendar,from+60000,to+60000,'v1');assert.equal(calls,1);
+  await appleObjects(client,calendar,from,to,'v2');assert.equal(calls,2);
+  await appleObjects(client,calendar,from,to);assert.equal(calls,3);
+  await createApple(client,calendar,{title:'Test',start:from,end:to,allDay:false,location:''});
+  await appleObjects(client,calendar,from,to,'v2');assert.equal(calls,4);
+  await appleObjects(client,calendar,from,to+86400000,'v2');assert.equal(calls,5);
 });

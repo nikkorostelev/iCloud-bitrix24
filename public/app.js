@@ -22,7 +22,7 @@ function progress(data) {
   $('last-run').textContent = data.busy ? p?.phase === 'reading' ? `Загрузка календарей: ${p.calendarsDone + 1} / ${p.calendarsTotal} · ${p.calendarName || ''}` : p?.phase === 'writing' ? `Перенесено: ${p.done} / ${p.total} · ${p.calendarName || ''} · ${p.title || ''}` : 'Синхронизация выполняется...' : data.lastSuccess ? `Проверка завершена: ${new Date(data.lastSuccess).toLocaleString('ru-RU')}` : 'Первая синхронизация ещё не выполнена';
   $('auto-enabled').checked = data.autoEnabled;
   $('auto-enabled').disabled = sessionExpired;
-  $('sync-mode').textContent = data.autoEnabled ? data.autoWaitingReason ? `Автообмен включён. ${data.autoWaitingReason}. События пока не переносятся.` : `${data.eventsBound ? 'Bitrix24: по уведомлениям. ' : ''}Проверка календарей: каждые ${data.pollSeconds} секунд.` : 'Автосинхронизация выключена';
+  $('sync-mode').textContent = data.autoEnabled ? data.autoWaitingReason ? `Автообмен включён. ${data.autoWaitingReason}. События пока не переносятся.` : `${data.eventsBound ? 'Битрикс24: по уведомлениям. ' : ''}iCloud: проверка изменений каждые ${data.pollSeconds} секунд. Полная проверка: каждые ${data.fullScanSeconds || 30} секунд.` : 'Автосинхронизация выключена';
   $('sync-summary').textContent = `Связано событий: ${data.pairCount}. Конфликтов: ${data.conflicts || 0}. Пропущено: ${data.skipped || 0}.`;
   const error = data.lastAutoError || data.eventBindingError;
   $('auto-error').hidden = !error;
@@ -142,4 +142,4 @@ $('disconnect-confirm').onclick=event=>action(event.target,async()=>{
   await loadStatus(); notice(`iCloud отключён. Удалено календарей Битрикса: ${result.deleted.length}.`,'success');
 });
 loadStatus().catch(error=>notice(error.message));
-setInterval(async()=>{ if(sessionExpired || !statusData || document.hidden) return; try { progress(await api('/api/progress')); } catch(error) { notice(error.message); } },5000);
+setInterval(async()=>{ if(sessionExpired || !statusData || document.hidden) return; try { progress(await api('/api/progress')); } catch(error) { notice(error.message); } },2000);

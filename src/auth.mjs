@@ -10,7 +10,7 @@ function sessionSignature(payload) {
   return createHmac('sha256', key).update(`browser-session:v1:${payload}`).digest('base64url');
 }
 const refreshes = new Map();
-let nextRequestAt = 0;
+const nextRequestAt = new Map();
 const legacyPortal = process.env.BITRIX_PORTAL || 'bazabzshow.bitrix24.ru';
 export const portalOf = (value=account()) => normalizePortal(value.portal || legacyPortal);
 export async function loadedAccount(id) {
@@ -22,8 +22,9 @@ export async function loadedAccount(id) {
   return accounts.get(id);
 }
 async function call(endpoint, token, method, params = {}) {
-  const slot = Math.max(Date.now(), nextRequestAt);
-  nextRequestAt = slot + 550;
+  const portal = new URL(endpoint).hostname;
+  const slot = Math.max(Date.now(), nextRequestAt.get(portal) || 0);
+  nextRequestAt.set(portal, slot + 550);
   if (slot > Date.now()) await new Promise(resolve => setTimeout(resolve, slot - Date.now()));
   const response = await portalFetch(`${endpoint}${method}.json`, {
     method: 'POST', headers: { 'content-type': 'application/json' },

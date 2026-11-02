@@ -79,14 +79,18 @@ It is not a read-only test and should not be part of unattended CI.
 
 ## Operational Limits
 
-Background polling is scheduled every 30 seconds; Bitrix24 notifications can
-trigger an earlier pass. Provider failures use retry backoff up to 15 minutes.
+Lightweight iCloud ctag/sync-token checks run every 5 seconds. Bitrix24 event
+notifications debounce for 200 ms and target the affected calendar. A full
+fallback scan runs every 30 seconds. Provider failures use retry backoff up to
+15 minutes, honoring longer Retry-After cooldowns where supplied.
 Automatic mode may be enabled in advance, but no background writes occur until
 the selected calendars are applied and their first synchronization is confirmed.
 
-Only selected calendar pairs are processed, from yesterday through the selected
-future horizon. Recurring events, all-day events, sub-minute timestamps and
-iCloud invitations are skipped. Event deletions, calendar renames and moves
+Only selected calendar pairs are processed, from seven days ago through the selected
+future horizon. iCloud recurrence instances are imported as source-only individual
+copies, including exceptions and reschedules. Native Bitrix recurring series,
+all-day events, sub-minute timestamps and iCloud invitations are skipped.
+Event deletions, calendar renames and moves
 between calendars are not synchronized. Simultaneous edits produce conflicts
 instead of silently overwriting one side. CalDAV discovery/authorization can
 fail even when the application's HTTP health endpoint is healthy.

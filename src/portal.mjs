@@ -17,18 +17,16 @@ export function verifiedEndpoint(endpoint, domain) {
 export function isPublicAddress(address) {
   try { return ipaddr.process(address).range()==='unicast'; } catch { return false; }
 }
-// Validate and pin the resolved IP at connection time, including custom-domain portals.
-export async function portalFetch(url, options) {
-  const dispatcher=new Agent({connect:{lookup:(hostname, settings, callback)=>{
+// Every new connection validates and pins DNS; established HTTPS connections can be reused.
+const dispatcher=new Agent({connections:2,connect:{lookup:(hostname, settings, callback)=>{
     lookup(hostname,{all:true,verbatim:true}).then(addresses=>{
       if (!addresses.length || addresses.some(item=>!isPublicAddress(item.address))) throw new Error('Портал должен быть доступен по публичному HTTPS-адресу');
       if (settings.all) callback(null,addresses);
       else callback(null,addresses[0].address,addresses[0].family);
     }).catch(error=>callback(error));
   }}});
-  try {
+export async function portalFetch(url, options) {
     const response=await fetch(url,{...options,dispatcher,redirect:'error'});
     const data=await response.json();
     return {ok:response.ok,status:response.status,data};
-  } finally { await dispatcher.close(); }
 }
