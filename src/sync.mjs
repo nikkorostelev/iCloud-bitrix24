@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { account, saveAccount } from './config.mjs';
 import { calendarLinks, inventory } from './calendars.mjs';
-import { events, normalizeBitrix, createBitrix, updateBitrix } from './bitrix.mjs';
-import { appleObjects, expandApple, createApple, updateApple } from './icloud.mjs';
+import { events, normalizeBitrix, createBitrix, updateBitrix, lookupBitrix, deleteBitrix } from './bitrix.mjs';
+import { appleObjects, expandApple, createApple, updateApple, lookupApple, deleteApple } from './icloud.mjs';
 import { plan, upsertPair, fingerprint } from './planner.mjs';
 
 const busyAccounts = new Set();
@@ -22,6 +22,30 @@ export function previewSignature(data) {
     })), pairs: account().state.pairs,
   })).digest('hex');
 }
+export async function reconcileMissing(bitrix, apple, pairs, services, from, to) {
+  const byB=new Map(bitrix.map(e=>[e.id,e])),byA=new Map(apple.map(e=>[e.id,e]));
+  const deletedBitrixIds=new Set(),deletedAppleUrls=new Set();
+  const candidates=pairs.filter(pair=>{
+    if (byB.has(pair.bitrixId)||byA.has(pair.appleUrl)) return true;
+    // Legacy fingerprints contain the last synchronized interval, including out-of-query events.
+    try {const [,start,end]=JSON.parse(pair.appleFingerprint);return end>=from && start<=to;} catch {return false;}
+  });
+  for (const pair of candidates) {
+    if (!byB.has(pair.bitrixId)) {
+      const event=await services.lookupBitrix(pair.bitrixId);
+      if (event===null) deletedBitrixIds.add(pair.bitrixId);
+      else if (event?.id===pair.bitrixId) byB.set(event.id,event);
+      else throw new Error('Не удалось подтвердить состояние события Битрикса');
+    }
+    if (!byA.has(pair.appleUrl)) {
+      const event=await services.lookupApple(pair.appleUrl);
+      if (event===null) deletedAppleUrls.add(pair.appleUrl);
+      else if (event?.id===pair.appleUrl) byA.set(event.id,event);
+      else throw new Error('Не удалось подтвердить состояние события iCloud');
+    }
+  }
+  return {bitrix:[...byB.values()],apple:[...byA.values()],state:{pairs:candidates,deletedBitrixIds,deletedAppleUrls}};
+}
 export async function snapshot({linkIds, revisions} = {}) {
   const value = account();
   const links = calendarLinks(value.config).filter(link => link.enabled && (!linkIds || linkIds.includes(link.id)));
@@ -40,17 +64,19 @@ export async function snapshot({linkIds, revisions} = {}) {
     const a = await appleObjects(data.client, calendar, from, to, revisions?.[calendar.url]);
     const bitrix = bitrixEvents.filter(e=>String(e.SECTION_ID)===link.bitrixId).map(normalizeBitrix).filter(e => e.end >= from && e.start <= to);
     const apple = a.flatMap(object => expandApple(object, from, to));
-    const idsB = new Set(bitrix.map(e => e.id)), idsA = new Set(apple.map(e => e.id));
-    const state = { pairs: (value.state.pairs || []).filter(pair => (pair.calendarLinkId || 'legacy') === link.id && (idsB.has(pair.bitrixId) || idsA.has(pair.appleUrl))) };
-    const actions = plan(bitrix, apple, state).map(action => ({ ...action, calendarName: section.name, calendarLinkId: link.id }));
-    return { link, calendar, bitrix, apple, actions };
+    const cache=new Map();
+    const verified=await reconcileMissing(bitrix,apple,(value.state.pairs||[]).filter(pair=>(pair.calendarLinkId||'legacy')===link.id),{
+      lookupBitrix:id=>lookupBitrix(id,link.bitrixId),lookupApple:id=>lookupApple(data.client,id,cache),
+    },from,to);
+    const actions = plan(verified.bitrix, verified.apple, verified.state).map(action => ({ ...action, calendarName: section.name, calendarLinkId: link.id }));
+    return { link, calendar, bitrix:verified.bitrix, apple:verified.apple, actions };
     }));
     groups.push(...batch);
   }
   return { client: data.client, groups, actions: groups.flatMap(g => g.actions), bitrixCount: groups.reduce((n,g)=>n+g.bitrix.length,0), appleCount: groups.reduce((n,g)=>n+g.apple.length,0) };
 }
 export async function runSync(expectedPreview = null, overrides = {}) {
-  const providers = { snapshot, createApple, createBitrix, updateApple, updateBitrix, ...overrides };
+  const providers = { snapshot, createApple, createBitrix, updateApple, updateBitrix, lookupApple, lookupBitrix, deleteApple, deleteBitrix, ...overrides };
   return exclusive(async () => {
     const value = account();
     let data;
@@ -69,6 +95,23 @@ export async function runSync(expectedPreview = null, overrides = {}) {
         if (['conflict', 'skip'].includes(action.kind)) continue;
         value.state.syncProgress = { phase: 'writing', done: results.length, total, calendarName: action.calendarName, title: action.title };
         try {
+          if (['deleteApple','deleteBitrix','forgetPair'].includes(action.kind)) {
+            const pair=action.pair;
+            if (!(value.state.pairs||[]).some(p=>p.bitrixId===pair.bitrixId && p.appleUrl===pair.appleUrl && (p.calendarLinkId||'legacy')===group.link.id)) throw new Error('Связь удаляемого события изменилась');
+            if (action.kind==='deleteApple') {
+              if (await providers.lookupBitrix(pair.bitrixId,group.link.bitrixId)) throw new Error('Событие Битрикса восстановлено; удаление отменено');
+              await providers.deleteApple(data.client,byA.get(pair.appleUrl));
+            }
+            if (action.kind==='deleteBitrix') {
+              if (await providers.lookupApple(data.client,pair.appleUrl)) throw new Error('Событие iCloud восстановлено; удаление отменено');
+              await providers.deleteBitrix(byB.get(pair.bitrixId),group.link.bitrixId);
+            }
+            value.state.pairs=value.state.pairs.filter(p=>!(p.bitrixId===pair.bitrixId && p.appleUrl===pair.appleUrl && (p.calendarLinkId||'legacy')===group.link.id));
+            value.state.deletedPairs=[...(value.state.deletedPairs||[]),{...pair,deletedAt:new Date().toISOString(),action:action.kind}].slice(-500);
+            await saveAccount(value);
+            results.push({kind:action.kind,title:action.title,start:action.target?.start,calendarName:action.calendarName,ok:true});
+            continue;
+          }
           let b, a;
           if (action.kind === 'link') { b = byB.get(action.source.id); a = byA.get(action.target.id); }
           if (action.kind === 'createApple') { b = byB.get(action.source.id); a = { ...b, side: 'apple', id: await providers.createApple(data.client, group.calendar, b) }; }
@@ -81,7 +124,7 @@ export async function runSync(expectedPreview = null, overrides = {}) {
           await saveAccount(value);
           results.push({ kind: action.kind, title: action.title, start: action.source?.start, calendarName: action.calendarName, ok: true });
         } catch (error) {
-          results.push({ kind: action.kind, title: action.title, start: action.source?.start, calendarName: action.calendarName, ok: false, error: error.message, code:error.code, retryAfterMs:error.retryAfterMs });
+          results.push({ kind: action.kind, title: action.title, start: action.source?.start || action.target?.start, calendarName: action.calendarName, ok: false, error: error.message, code:error.code, retryAfterMs:error.retryAfterMs });
           failed = true; break;
         }
       }

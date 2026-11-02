@@ -87,10 +87,13 @@ Automatic mode may be enabled in advance, but no background writes occur until
 the selected calendars are applied and their first synchronization is confirmed.
 
 Only selected calendar pairs are processed, from seven days ago through the selected
-future horizon. iCloud recurrence instances are imported as source-only individual
-copies, including exceptions and reschedules. Native Bitrix recurring series,
+future horizon. iCloud recurrence instances are imported as individual
+copies with source-only title/time updates, including exceptions and reschedules. Native Bitrix recurring series,
 all-day events, sub-minute timestamps and iCloud invitations are skipped.
-Event deletions, calendar renames and moves
-between calendars are not synchronized. Simultaneous edits produce conflicts
+Linked event deletions propagate in both directions after explicit ID/resource
+checks; missing query results or permission errors never constitute deletion proof.
+Deleting a Bitrix recurrence copy excludes only that occurrence in iCloud.
+Deletion/edit conflicts and Bitrix meetings with attendees are protected.
+Calendar renames and moves between calendars are not synchronized. Simultaneous edits produce conflicts
 instead of silently overwriting one side. CalDAV discovery/authorization can
 fail even when the application's HTTP health endpoint is healthy.

@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { DAVClient } from 'tsdav';
 import ICAL from 'ical.js';
 import { getApplePassword, context, saveAccount } from './config.mjs';
+import { fingerprint } from './planner.mjs';
 
 const clients = new Map();
 export function forgetAppleClients() {
@@ -204,7 +205,7 @@ export function expandApple(object, from, to) {
     }
     // An exception may move into the window from an original date beyond its end.
     for (const exception of Object.values(event.exceptions)) {
-      if (!seen.has(exception.recurrenceId.toString())) append(exception, exception.startDate, exception.endDate, exception.recurrenceId);
+      if (!seen.has(exception.recurrenceId.toString()) && !excluded(component,exception.recurrenceId)) append(exception, exception.startDate, exception.endDate, exception.recurrenceId);
     }
   }
   for (const component of components.filter(c => c.hasProperty('recurrence-id') && !masters.some(m => m.getFirstPropertyValue('uid') === c.getFirstPropertyValue('uid')))) {
@@ -257,4 +258,92 @@ export async function updateApple(client, event, source) {
   } });
   objectCache.delete(client);
   if (!response.ok) throw new Error(`iCloud: обновление события вернуло HTTP ${response.status}`);
+}
+
+function excluded(master, recurrenceId) {
+  return master.getAllProperties('exdate').some(p=>p.getValues().some(time=>time.compare(recurrenceId)===0));
+}
+
+function occurrenceInObject(object, key) {
+  const root = new ICAL.Component(ICAL.parse(object.data));
+  if (!root.getFirstSubcomponent('vevent')) throw new Error('iCloud вернул неполную серию повторов');
+  const master = root.getAllSubcomponents('vevent').find(c=>!c.hasProperty('recurrence-id'));
+  if (!master) {
+    const exception = root.getAllSubcomponents('vevent').find(c=>c.getFirstPropertyValue('recurrence-id')?.toString()===key);
+    if (!exception) return null;
+    const event = new ICAL.Event(exception);
+    return {event,startDate:event.startDate,endDate:event.endDate,recurrenceId:event.recurrenceId};
+  }
+  const event = new ICAL.Event(master);
+  if (master.getFirstPropertyValue('status')==='CANCELLED') return null;
+  const wanted = ICAL.Time.fromString(key);
+  if (wanted.zone.tzid==='floating') wanted.zone=event.startDate.zone;
+  if (excluded(master,wanted)) return null;
+  const exception = Object.values(event.exceptions).find(e=>e.recurrenceId.toString()===key);
+  if (exception) return {event:exception,startDate:exception.startDate,endDate:exception.endDate,recurrenceId:exception.recurrenceId};
+  if (!event.isRecurring()) return null;
+  const iterator=event.iterator();
+  for (let count=0;count<200000;count++) {
+    const occurrence=iterator.next();
+    if (!occurrence || occurrence.compare(wanted)>0) return null;
+    if (occurrence.toString()===key) {
+      const d=event.getOccurrenceDetails(occurrence);
+      return {event:d.item,startDate:d.startDate,endDate:d.endDate,recurrenceId:occurrence};
+    }
+  }
+  throw new Error('Слишком большая серия повторов iCloud');
+}
+
+export async function lookupApple(client, id, cache = new Map()) {
+  const url = new URL(id);
+  const key = url.hash.startsWith('#occurrence=') ? decodeURIComponent(url.hash.slice(12)) : null;
+  url.hash='';
+  if (!cache.has(url.href)) cache.set(url.href, (async()=>{
+    const response=await icloudFetch(url.href,{method:'GET',headers:client.authHeaders});
+    if ([404,410].includes(response.status)) {await response.body?.cancel();return null;}
+    if (!response.ok) {await response.body?.cancel();throw new Error(`iCloud: проверка события вернула HTTP ${response.status}`);}
+    return {url:url.href,etag:response.headers.get('etag'),data:await response.text()};
+  })());
+  const object=await cache.get(url.href);
+  if (!object) return null;
+  if (!key) {
+    const root=new ICAL.Component(ICAL.parse(object.data));
+    const component=root.getFirstSubcomponent('vevent');
+    if (!component) throw new Error('iCloud вернул неполное событие');
+    if (component.getFirstPropertyValue('status')==='CANCELLED') return null;
+    const result=normalizeApple(object);
+    if (!result) throw new Error('iCloud вернул некорректное событие');
+    return {...result,id};
+  }
+  const d=occurrenceInObject(object,key);
+  if (!d || d.event.component.getFirstPropertyValue('status')==='CANCELLED') return null;
+  const start=d.startDate.toJSDate().getTime(),end=d.endDate.toJSDate().getTime();
+  if (!Number.isFinite(start)||!Number.isFinite(end)) throw new Error('iCloud вернул некорректную дату повтора');
+  return {side:'apple',id,title:d.event.summary||'',start,end,allDay:d.startDate.isDate,
+    location:d.event.component.getFirstPropertyValue('location')||'',sourceOnly:true,object,etag:object.etag,recurrenceId:d.recurrenceId,
+    unsupported:d.startDate.isDate || start%60000 || end%60000 || d.event.component.hasProperty('attendee') ? 'Неподдерживаемое вхождение повтора' : null};
+}
+
+export async function deleteApple(client, expected) {
+  const current=await lookupApple(client,expected.id);
+  if (!current) return;
+  if (current.unsupported || fingerprint(current)!==fingerprint(expected) || !current.etag) throw new Error('Событие iCloud изменилось или не вернуло ETag. Удаление остановлено');
+  let response;
+  if (!current.sourceOnly) response=await client.deleteCalendarObject({calendarObject:{url:current.object.url,etag:current.etag}});
+  else {
+    const root=new ICAL.Component(ICAL.parse(current.object.data));
+    const master=root.getAllSubcomponents('vevent').find(c=>!c.hasProperty('recurrence-id'));
+    if (master) {
+      const property=new ICAL.Property('exdate');property.setValue(current.recurrenceId.clone());
+      const zone=current.recurrenceId.zone.tzid;
+      if (!['UTC','floating'].includes(zone)) property.setParameter('tzid',zone);
+      master.addProperty(property);
+    }
+    for (const c of root.getAllSubcomponents('vevent')) if (c.getFirstPropertyValue('recurrence-id')?.toString()===current.recurrenceId.toString() && c.getFirstProperty('recurrence-id')?.getParameter('range')!=='THISANDFUTURE') root.removeSubcomponent(c);
+    response = root.getAllSubcomponents('vevent').length
+      ? await client.updateCalendarObject({calendarObject:{...current.object,data:root.toString()}})
+      : await client.deleteCalendarObject({calendarObject:current.object});
+  }
+  objectCache.delete(client);
+  if (!response.ok && ![404,410].includes(response.status)) throw new Error(`iCloud: удаление вернуло HTTP ${response.status}`);
 }

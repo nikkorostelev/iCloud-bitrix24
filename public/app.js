@@ -27,7 +27,7 @@ function progress(data) {
   const error = data.lastAutoError || data.eventBindingError;
   $('auto-error').hidden = !error;
   $('auto-error').textContent = error ? `${error}${data.nextRetryAt ? ` · Следующая попытка: ${new Date(data.nextRetryAt).toLocaleTimeString('ru-RU')}` : ''}` : '';
-  $('results').replaceChildren(...data.lastResults.slice(-30).map(item => el('li', `${item.ok ? 'Готово' : 'Ошибка'} · ${item.calendarName || ''} · ${item.title}${item.start ? ` · ${new Date(item.start).toLocaleString('ru-RU')}` : ''}${item.error ? ` · ${item.error}` : ''}`, item.ok ? 'ok' : 'bad')));
+  $('results').replaceChildren(...data.lastResults.slice(-30).map(item => el('li', `${item.ok ? actionLabel(item.kind) : 'Ошибка'} · ${item.calendarName || ''} · ${item.title}${item.start ? ` · ${new Date(item.start).toLocaleString('ru-RU')}` : ''}${item.error ? ` · ${item.error}` : ''}`, item.ok ? 'ok' : 'bad')));
 }
 function calendarName(name, color) {
   const label = el('span', name);
@@ -94,7 +94,7 @@ function additions() {
   }
   return result;
 }
-const actionLabel = kind => ({ link:'Связать', createApple:'В iCloud', createBitrix:'В Битрикс24', updateApple:'Обновить iCloud', updateBitrix:'Обновить Битрикс24', conflict:'Конфликт', skip:'Пропустить' })[kind] || kind;
+const actionLabel = kind => ({ link:'Связать', createApple:'В iCloud', createBitrix:'В Битрикс24', updateApple:'Обновить iCloud', updateBitrix:'Обновить Битрикс24', deleteApple:'Удалить в iCloud', deleteBitrix:'Удалить в Битрикс24', forgetPair:'Удалено с обеих сторон', conflict:'Конфликт', skip:'Пропустить' })[kind] || kind;
 async function preview() {
   if (dirty) throw new Error('Сначала сохраните выбор календарей');
   previewToken = ''; $('run-button').disabled = true;

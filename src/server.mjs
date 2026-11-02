@@ -120,7 +120,7 @@ export async function handle(req, res) {
         if (config.pendingBitrixIds?.length) throw new Error('Есть сохранённый выбор календарей Битрикса. После восстановления iCloud нажмите «Сохранить календари» для применения');
         const data = await snapshot();
         return response(res, 200, { bitrixCount: data.bitrixCount, appleCount: data.appleCount, previewToken: previewSignature(data),
-          actions: data.actions.map(({ kind, title, reason, source, calendarName }) => ({ kind, title, reason, calendarName, start: source?.start })) });
+          actions: data.actions.map(({ kind, title, reason, source, target, calendarName }) => ({ kind, title, reason, calendarName, start: source?.start || target?.start })) });
       });
       if (req.method === 'POST' && url.pathname === '/api/run') {
         const { confirm, previewToken } = await jsonBody(req);

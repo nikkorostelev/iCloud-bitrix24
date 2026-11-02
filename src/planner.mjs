@@ -24,9 +24,19 @@ export function plan(bitrix, apple, state) {
   for (const pair of pairs) {
     const b = byB.get(pair.bitrixId);
     const a = byA.get(pair.appleUrl);
-    if (!b && !a) continue;
+    const missingB = state.deletedBitrixIds?.has(pair.bitrixId);
+    const missingA = state.deletedAppleUrls?.has(pair.appleUrl);
+    if (!b && !a) {
+      if (missingB && missingA) actions.push({kind:'forgetPair',title:'Удалено в обоих календарях',pair});
+      continue;
+    }
     if (!b || !a) {
-      actions.push({ kind: 'conflict', title: (b || a).title, reason: 'Связанное событие отсутствует на одной стороне; автоматического восстановления и удаления нет' });
+      const remaining = b || a;
+      const confirmed = !b ? missingB : missingA;
+      const expected = !b ? pair.appleFingerprint : pair.bitrixFingerprint;
+      if (!confirmed) actions.push({kind:'conflict',title:remaining.title,reason:'Отсутствие события не подтверждено отдельной проверкой'});
+      else if (remaining.unsupported || b?.isMeeting || fingerprint(remaining) !== expected) actions.push({kind:'conflict',title:remaining.title,reason:'Удаление конфликтует с изменением события, повтором Битрикса или встречей с участниками'});
+      else actions.push({kind:!b?'deleteApple':'deleteBitrix',title:remaining.title,target:concise(remaining),pair,reason:!b?'Удалено в Битрикс24':'Удалено или отменено в iCloud'});
       continue;
     }
     if (b.unsupported || a.unsupported) {

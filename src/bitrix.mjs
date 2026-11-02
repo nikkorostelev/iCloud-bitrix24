@@ -1,5 +1,6 @@
 import { oauthCall } from './auth.mjs';
 import { account } from './config.mjs';
+import { fingerprint } from './planner.mjs';
 
 export async function b24(method, params = {}) {
   return oauthCall(method, params);
@@ -38,7 +39,23 @@ export async function events(sectionId, from, to) {
   const result = await b24('calendar.event.get', {
     type: 'user', ownerId: user.id, section: [...ids].map(Number), from, to,
   });
-  return result.filter(event => ids.has(String(event.SECTION_ID)));
+  return result.filter(event => ids.has(String(event.SECTION_ID)) && event.DELETED !== 'Y');
+}
+
+export async function lookupBitrix(id, sectionId) {
+  const event = await b24('calendar.event.getbyid', {id:Number(id)});
+  if (event === null) return null;
+  if (!event || Array.isArray(event) || String(event.ID)!==String(id)) throw new Error('Битрикс24 не подтвердил состояние события');
+  if (event.CAL_TYPE !== 'user' || Number(event.OWNER_ID)!==account().user.id || String(event.SECTION_ID)!==String(sectionId)) throw new Error('Событие перемещено или больше не принадлежит выбранному календарю');
+  return event.DELETED === 'Y' ? null : normalizeBitrix(event);
+}
+
+export async function deleteBitrix(event, sectionId) {
+  const current = await lookupBitrix(event.id, sectionId);
+  if (!current) return;
+  if (current.unsupported || current.isMeeting || fingerprint(current)!==fingerprint(event)) throw new Error('Событие изменилось перед удалением. Обновите проверку');
+  const result = await b24('calendar.event.delete', {id:Number(event.id)});
+  if (result !== true) throw new Error('Битрикс24 не подтвердил удаление события');
 }
 
 export async function eventSection(id) {
