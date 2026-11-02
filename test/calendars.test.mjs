@@ -112,3 +112,24 @@ test('identical events in different calendars are routed to their own counterpar
   assert.deepEqual(value.state.pairs.map(p=>[p.calendarLinkId,p.bitrixId]),[['1','event-1'],['2','event-2']]);
   assert.ok(value.state.initializedLinks['1'] && value.state.initializedLinks['2']);
 });
+
+test('recurrence copies are idempotent and history survives subsequent unchanged passes', async()=>{
+  const {plan} = await import('../src/planner.mjs');
+  const value={id:accountId('test','recurring-routing'),config:{},state:{pairs:[]}};
+  const apple=[1,2,3].map(day=>({side:'apple',id:`https://caldav.icloud.com/series.ics#${day}`,title:'Planning',start:day*86400000,end:day*86400000+3600000,allDay:false,location:'',sourceOnly:true}));
+  const bitrix=[];
+  const services={snapshot:async()=>{const actions=plan(bitrix,apple,value.state);return {groups:[{link:{id:'recurring',bitrixId:'1'},calendar:{},bitrix,apple,actions}],actions};},createBitrix:async event=>{
+    assert.equal(value.state.syncProgress.phase,'writing');
+    const id=String(bitrix.length+1); bitrix.push({...event,side:'bitrix',id,sourceOnly:false}); return id;
+  }};
+  await context.run(value,()=>runSync(null,services));
+  assert.equal(bitrix.length,3);
+  assert.equal(value.state.syncProgress,null);
+  assert.equal(value.state.lastResults.length,3);
+  const second=await context.run(value,()=>runSync(null,services));
+  assert.equal(second.results.length,0);
+  assert.equal(bitrix.length,3);
+  assert.equal(value.state.lastResults.length,3);
+  await assert.rejects(context.run(value,()=>runSync(null,{snapshot:async()=>{throw new Error('Provider unavailable');}})),/Provider unavailable/);
+  assert.equal(value.state.syncProgress,null);
+});

@@ -135,6 +135,53 @@ export function normalizeApple(object) {
   } catch { return null; }
 }
 
+export function expandApple(object, from, to) {
+  const root = new ICAL.Component(ICAL.parse(object.data));
+  const components = root.getAllSubcomponents('vevent');
+  const masters = components.filter(c => !c.hasProperty('recurrence-id'));
+  const output = [];
+  const append = (event, startDate, endDate, recurrenceId) => {
+    if (event.component.getFirstPropertyValue('status') === 'CANCELLED') return;
+    const start = startDate.toJSDate().getTime(), end = endDate.toJSDate().getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end)) throw new Error('Некорректная дата iCloud');
+    if (end < from || start > to) return;
+    const unsupported = startDate.isDate ? 'Событие на весь день пока не переносится'
+      : start % 60000 || end % 60000 ? 'Bitrix24 поддерживает время с точностью до минуты; событие с секундами пропущено'
+      : event.component.hasProperty('attendee') ? 'Приглашение iCloud пока не переносится' : null;
+    output.push({ side: 'apple', id: recurrenceId ? `${object.url}#occurrence=${encodeURIComponent(recurrenceId.toString())}` : object.url,
+      title: event.summary || '', start, end, allDay: startDate.isDate,
+      location: event.component.getFirstPropertyValue('location') || '', unsupported,
+      sourceOnly: !!recurrenceId, etag: object.etag, object });
+  };
+  for (const component of masters) {
+    const event = new ICAL.Event(component, { exceptions: components.filter(c => c.hasProperty('recurrence-id') && c.getFirstPropertyValue('uid') === component.getFirstPropertyValue('uid')) });
+    if (!event.isRecurring()) { append(event, event.startDate, event.endDate); continue; }
+    const seen = new Set();
+    const iterator = event.iterator();
+    const backwardShift = Math.max(0, ...Object.values(event.exceptions)
+      .filter(exception => exception.component.getFirstProperty('recurrence-id')?.getParameter('range') === 'THISANDFUTURE')
+      .map(exception => exception.recurrenceId.toJSDate().getTime() - exception.startDate.toJSDate().getTime()));
+    // Start at the original DTSTART so COUNT, EXDATE and recurrence identities remain correct.
+    for (let count = 0; ; count++) {
+      if (count >= 200000) throw new Error('Слишком большая серия повторов iCloud');
+      const occurrence = iterator.next();
+      if (!occurrence || occurrence.toJSDate().getTime() > to + backwardShift) break;
+      const details = event.getOccurrenceDetails(occurrence);
+      seen.add(occurrence.toString());
+      append(details.item, details.startDate, details.endDate, occurrence);
+    }
+    // An exception may move into the window from an original date beyond its end.
+    for (const exception of Object.values(event.exceptions)) {
+      if (!seen.has(exception.recurrenceId.toString())) append(exception, exception.startDate, exception.endDate, exception.recurrenceId);
+    }
+  }
+  for (const component of components.filter(c => c.hasProperty('recurrence-id') && !masters.some(m => m.getFirstPropertyValue('uid') === c.getFirstPropertyValue('uid')))) {
+    const event = new ICAL.Event(component);
+    append(event, event.startDate, event.endDate, event.recurrenceId);
+  }
+  return output;
+}
+
 export function icalString(event, uid = randomUUID()) {
   const root = new ICAL.Component(['vcalendar', [], []]);
   root.updatePropertyWithValue('version', '2.0');
@@ -161,6 +208,7 @@ export async function createApple(client, calendar, event) {
 }
 
 export async function updateApple(client, event, source) {
+  if (event.sourceOnly) throw new Error('Копию повтора изменяйте в исходном календаре iCloud');
   const component = new ICAL.Component(ICAL.parse(event.object.data));
   const vevent = component.getFirstSubcomponent('vevent');
   vevent.updatePropertyWithValue('summary', source.title);

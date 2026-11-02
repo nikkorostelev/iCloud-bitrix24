@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { account, saveAccount } from './config.mjs';
 import { calendarLinks, inventory } from './calendars.mjs';
 import { events, normalizeBitrix, createBitrix, updateBitrix } from './bitrix.mjs';
-import { appleObjects, normalizeApple, createApple, updateApple } from './icloud.mjs';
+import { appleObjects, expandApple, createApple, updateApple } from './icloud.mjs';
 import { plan, upsertPair, fingerprint } from './planner.mjs';
 
 const busyAccounts = new Set();
@@ -11,7 +11,7 @@ export async function exclusive(callback) {
   if (isBusy()) throw new Error('Синхронизация уже выполняется');
   const id = account().id;
   busyAccounts.add(id);
-  try { return await callback(); } finally { busyAccounts.delete(id); }
+  try { return await callback(); } finally { account().state.syncProgress = null; busyAccounts.delete(id); }
 }
 export function previewSignature(data) {
   return createHash('sha256').update(JSON.stringify({
@@ -27,10 +27,11 @@ export async function snapshot() {
   const links = calendarLinks(value.config).filter(link => link.enabled);
   if (!links.length) throw new Error('Выберите календари для синхронизации');
   const data = await inventory();
-  const from = Date.now() - 86400000;
+  const from = Date.now() - 7 * 86400000;
   const to = Date.now() + (value.config.horizonDays || 30) * 86400000;
   const groups = [];
   for (const link of links) {
+    value.state.syncProgress = { phase: 'reading', calendarName: link.bitrixName, calendarsDone: groups.length, calendarsTotal: links.length, from, to };
     const calendar = data.apple.find(c => c.url === link.appleUrl);
     const section = data.bitrix.find(c => c.id === link.bitrixId);
     if (!calendar || !section) throw new Error(`Календарь недоступен: ${link.bitrixName || link.appleName || link.id}`);
@@ -38,9 +39,10 @@ export async function snapshot() {
       events(link.bitrixId, new Date(from).toISOString().slice(0,10), new Date(to).toISOString().slice(0,10)),
       appleObjects(data.client, calendar, from, to),
     ]);
-    const bitrix = b.map(normalizeBitrix).filter(e => e.start >= from && e.start <= to);
-    const apple = a.map(normalizeApple).filter(e => e && e.start >= from && e.start <= to);
-    const state = { pairs: (value.state.pairs || []).filter(pair => (pair.calendarLinkId || 'legacy') === link.id) };
+    const bitrix = b.map(normalizeBitrix).filter(e => e.end >= from && e.start <= to);
+    const apple = a.flatMap(object => expandApple(object, from, to));
+    const idsB = new Set(bitrix.map(e => e.id)), idsA = new Set(apple.map(e => e.id));
+    const state = { pairs: (value.state.pairs || []).filter(pair => (pair.calendarLinkId || 'legacy') === link.id && (idsB.has(pair.bitrixId) || idsA.has(pair.appleUrl))) };
     const actions = plan(bitrix, apple, state).map(action => ({ ...action, calendarName: section.name, calendarLinkId: link.id }));
     groups.push({ link, calendar, bitrix, apple, actions });
   }
@@ -50,9 +52,13 @@ export async function runSync(expectedPreview = null, overrides = {}) {
   const providers = { snapshot, createApple, createBitrix, updateApple, updateBitrix, ...overrides };
   return exclusive(async () => {
     const value = account();
-    const data = await providers.snapshot();
+    let data;
+    try { data = await providers.snapshot(); }
+    catch (error) { value.state.syncProgress = null; throw error; }
     if (expectedPreview && previewSignature(data) !== expectedPreview) throw new Error('Календари изменились. Обновите предпросмотр');
     const results = [];
+    const total = data.actions.filter(a => !['conflict', 'skip'].includes(a.kind)).length;
+    value.state.syncProgress = { phase: 'writing', done: 0, total };
     value.state.initializedLinks ||= {};
     for (const group of data.groups) {
       const byB = new Map(group.bitrix.map(e => [e.id, e]));
@@ -60,6 +66,7 @@ export async function runSync(expectedPreview = null, overrides = {}) {
       let failed = false;
       for (const action of group.actions) {
         if (['conflict', 'skip'].includes(action.kind)) continue;
+        value.state.syncProgress = { phase: 'writing', done: results.length, total, calendarName: action.calendarName, title: action.title };
         try {
           let b, a;
           if (action.kind === 'link') { b = byB.get(action.source.id); a = byA.get(action.target.id); }
@@ -71,16 +78,17 @@ export async function runSync(expectedPreview = null, overrides = {}) {
           upsertPair(scoped, b, a);
           value.state.pairs = [...(value.state.pairs || []).filter(pair => (pair.calendarLinkId || 'legacy') !== group.link.id), ...scoped.pairs.map(pair => ({ ...pair, calendarLinkId: group.link.id }))];
           await saveAccount(value);
-          results.push({ kind: action.kind, title: action.title, calendarName: action.calendarName, ok: true });
+          results.push({ kind: action.kind, title: action.title, start: action.source?.start, calendarName: action.calendarName, ok: true });
         } catch (error) {
-          results.push({ kind: action.kind, title: action.title, calendarName: action.calendarName, ok: false, error: error.message });
+          results.push({ kind: action.kind, title: action.title, start: action.source?.start, calendarName: action.calendarName, ok: false, error: error.message });
           failed = true; break;
         }
       }
       if (!failed) value.state.initializedLinks[group.link.id] = true;
     }
     value.state.lastRun = new Date().toISOString();
-    value.state.lastResults = results;
+    if (results.length) value.state.lastResults = results;
+    value.state.syncProgress = null;
     value.state.lastConflicts = data.actions.filter(a => a.kind === 'conflict').length;
     value.state.lastSkipped = data.actions.filter(a => a.kind === 'skip').length;
     value.state.lastAutoError = results.find(r => !r.ok)?.error || null;

@@ -36,7 +36,8 @@ export function plan(bitrix, apple, state) {
     const bf = fingerprint(b), af = fingerprint(a);
     const bc = bf !== pair.bitrixFingerprint;
     const ac = af !== pair.appleFingerprint;
-    if (bc && ac) actions.push({ kind: 'conflict', title: b.title, reason: 'Событие изменено в обоих календарях' });
+    if (bc && a.sourceOnly) actions.push({ kind: 'conflict', title: b.title, reason: 'Копия повтора изменена в Битрикс24; изменяйте исходную серию в iCloud' });
+    else if (bc && ac) actions.push({ kind: 'conflict', title: b.title, reason: 'Событие изменено в обоих календарях' });
     else if (bc) actions.push({ kind: 'updateApple', title: b.title, source: concise(b), target: concise(a) });
     else if (ac && b.isMeeting) actions.push({ kind: 'conflict', title: b.title, reason: 'Встреча Bitrix с участниками доступна только для чтения' });
     else if (ac) actions.push({ kind: 'updateBitrix', title: a.title, source: concise(a), target: concise(b) });
@@ -58,7 +59,7 @@ export function plan(bitrix, apple, state) {
   for (const a of unmatchedA) {
     if (matchedA.has(a.id)) continue;
     if (a.unsupported) { actions.push({ kind: 'skip', title: a.title, reason: a.unsupported }); continue; }
-    if (unmatchedB.some(b => !b.unsupported && identity(b) === identity(a))) continue;
+    if (unmatchedB.some(b => identity(b) === identity(a))) continue;
     actions.push({ kind: 'createBitrix', title: a.title, source: concise(a) });
   }
   return actions;

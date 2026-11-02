@@ -18,7 +18,8 @@ async function api(path, body) {
 function el(tag, text, className) { const n = document.createElement(tag); if (text != null) n.textContent = text; if (className) n.className = className; return n; }
 function invalidate() { dirty = true; previewToken = ''; $('run-button').disabled = true; }
 function progress(data) {
-  $('last-run').textContent = data.busy ? 'Синхронизация выполняется...' : data.lastSuccess ? `Успешная проверка: ${new Date(data.lastSuccess).toLocaleString('ru-RU')}` : 'Первая синхронизация ещё не выполнена';
+  const p = data.syncProgress;
+  $('last-run').textContent = data.busy ? p?.phase === 'reading' ? `Загрузка календарей: ${p.calendarsDone + 1} / ${p.calendarsTotal} · ${p.calendarName || ''}` : p?.phase === 'writing' ? `Перенесено: ${p.done} / ${p.total} · ${p.calendarName || ''} · ${p.title || ''}` : 'Синхронизация выполняется...' : data.lastSuccess ? `Проверка завершена: ${new Date(data.lastSuccess).toLocaleString('ru-RU')}` : 'Первая синхронизация ещё не выполнена';
   $('auto-enabled').checked = data.autoEnabled;
   $('auto-enabled').disabled = sessionExpired;
   $('sync-mode').textContent = data.autoEnabled ? data.autoWaitingReason ? `Автообмен включён. ${data.autoWaitingReason}. События пока не переносятся.` : `${data.eventsBound ? 'Bitrix24: по уведомлениям. ' : ''}Проверка календарей: каждые ${data.pollSeconds} секунд.` : 'Автосинхронизация выключена';
@@ -26,7 +27,7 @@ function progress(data) {
   const error = data.lastAutoError || data.eventBindingError;
   $('auto-error').hidden = !error;
   $('auto-error').textContent = error ? `${error}${data.nextRetryAt ? ` · Следующая попытка: ${new Date(data.nextRetryAt).toLocaleTimeString('ru-RU')}` : ''}` : '';
-  $('results').replaceChildren(...data.lastResults.slice(-30).map(item => el('li', `${item.ok ? 'Готово' : 'Ошибка'} · ${item.calendarName || ''} · ${item.title}${item.error ? ` · ${item.error}` : ''}`, item.ok ? 'ok' : 'bad')));
+  $('results').replaceChildren(...data.lastResults.slice(-30).map(item => el('li', `${item.ok ? 'Готово' : 'Ошибка'} · ${item.calendarName || ''} · ${item.title}${item.start ? ` · ${new Date(item.start).toLocaleString('ru-RU')}` : ''}${item.error ? ` · ${item.error}` : ''}`, item.ok ? 'ok' : 'bad')));
 }
 function calendarName(name, color) {
   const label = el('span', name);

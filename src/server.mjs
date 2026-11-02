@@ -34,6 +34,7 @@ function progress() {
     nextRetryAt: state.nextRetryAt || null, pairCount: state.pairs?.length || 0,
     lastResults: state.lastResults || [], conflicts: state.lastConflicts || 0, skipped: state.lastSkipped || 0,
     initializedLinks: state.initializedLinks || {},
+    syncProgress: state.syncProgress || null,
   };
 }
 export async function handle(req, res) {
