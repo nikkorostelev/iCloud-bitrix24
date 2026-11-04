@@ -88,8 +88,11 @@ the selected calendars are applied and their first synchronization is confirmed.
 
 Only selected calendar pairs are processed, from seven days ago through the selected
 future horizon. iCloud recurrence instances are imported as individual
-copies with source-only title/time updates, including exceptions and reschedules. Native Bitrix recurring series,
-all-day events, sub-minute timestamps and iCloud invitations are skipped.
+copies with source-only title/time updates, including exceptions and reschedules.
+Bitrix recurrence instances are expanded by its own API and exported as personal
+iCloud copies without attendees or invitations. Their synthetic date keys and real
+exception IDs are retained separately. Reverse edits/deletions cannot alter the
+Bitrix source series. All-day events, sub-minute timestamps and iCloud invitations are skipped.
 Linked event deletions propagate in both directions after explicit ID/resource
 checks; missing query results or permission errors never constitute deletion proof.
 Deleting a Bitrix recurrence copy excludes only that occurrence in iCloud.

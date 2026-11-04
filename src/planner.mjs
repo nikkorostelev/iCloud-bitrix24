@@ -35,7 +35,7 @@ export function plan(bitrix, apple, state) {
       const confirmed = !b ? missingB : missingA;
       const expected = !b ? pair.appleFingerprint : pair.bitrixFingerprint;
       if (!confirmed) actions.push({kind:'conflict',title:remaining.title,reason:'Отсутствие события не подтверждено отдельной проверкой'});
-      else if (remaining.unsupported || b?.isMeeting || fingerprint(remaining) !== expected) actions.push({kind:'conflict',title:remaining.title,reason:'Удаление конфликтует с изменением события, повтором Битрикса или встречей с участниками'});
+      else if (remaining.unsupported || b?.sourceOnly || b?.isMeeting || fingerprint(remaining) !== expected) actions.push({kind:'conflict',title:remaining.title,reason:'Удаление конфликтует с изменением события, повтором Битрикса или встречей с участниками'});
       else actions.push({kind:!b?'deleteApple':'deleteBitrix',title:remaining.title,target:concise(remaining),pair,reason:!b?'Удалено в Битрикс24':'Удалено или отменено в iCloud'});
       continue;
     }
@@ -49,7 +49,7 @@ export function plan(bitrix, apple, state) {
     if (bc && a.sourceOnly) actions.push({ kind: 'conflict', title: b.title, reason: 'Копия повтора изменена в Битрикс24; изменяйте исходную серию в iCloud' });
     else if (bc && ac) actions.push({ kind: 'conflict', title: b.title, reason: 'Событие изменено в обоих календарях' });
     else if (bc) actions.push({ kind: 'updateApple', title: b.title, source: concise(b), target: concise(a) });
-    else if (ac && b.isMeeting) actions.push({ kind: 'conflict', title: b.title, reason: 'Встреча Bitrix с участниками доступна только для чтения' });
+    else if (ac && (b.isMeeting || b.sourceOnly)) actions.push({ kind: 'conflict', title: b.title, reason: 'Повторы и встречи Bitrix с участниками доступны только для чтения; изменяйте исходное событие в Битриксе' });
     else if (ac) actions.push({ kind: 'updateBitrix', title: a.title, source: concise(a), target: concise(b) });
   }
 
@@ -79,6 +79,7 @@ export function upsertPair(state, bitrix, apple) {
   const pairs = state.pairs || [];
   const item = {
     bitrixId: bitrix.id, appleUrl: apple.id,
+    bitrixRecordId:bitrix.sourceRecordId || bitrix.id, bitrixSourceOnly:!!bitrix.sourceOnly,
     bitrixFingerprint: fingerprint(bitrix), appleFingerprint: fingerprint(apple),
   };
   const index = pairs.findIndex(pair => pair.bitrixId === bitrix.id || pair.appleUrl === apple.id);

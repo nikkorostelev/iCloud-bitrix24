@@ -42,18 +42,38 @@ export async function events(sectionId, from, to) {
   return result.filter(event => ids.has(String(event.SECTION_ID)) && event.DELETED !== 'Y');
 }
 
-export async function lookupBitrix(id, sectionId) {
-  const event = await b24('calendar.event.getbyid', {id:Number(id)});
+export function bitrixOccurrenceKey(value) {
+  const parts=/^(\d{2})\.(\d{2})\.(\d{4})(?: |$)/.exec(value||'');
+  return parts ? `${parts[3]}-${parts[2]}-${parts[1]}` : null;
+}
+
+export async function lookupBitrix(id, sectionId, pair = {}) {
+  const occurrence=/^(\d+)#occurrence=(\d{4}-\d{2}-\d{2})$/.exec(id);
+  const recordId=pair.bitrixRecordId || occurrence?.[1] || id;
+  if (!/^\d+$/.test(recordId)) throw new Error('Неверный идентификатор события Битрикса');
+  const event = await b24('calendar.event.getbyid', {id:Number(recordId)});
   if (event === null) return null;
-  if (!event || Array.isArray(event) || String(event.ID)!==String(id)) throw new Error('Битрикс24 не подтвердил состояние события');
+  if (!event || Array.isArray(event) || String(event.ID)!==String(recordId)) throw new Error('Битрикс24 не подтвердил состояние события');
   if (event.CAL_TYPE !== 'user' || Number(event.OWNER_ID)!==account().user.id || String(event.SECTION_ID)!==String(sectionId)) throw new Error('Событие перемещено или больше не принадлежит выбранному календарю');
-  return event.DELETED === 'Y' ? null : normalizeBitrix(event);
+  if (event.DELETED==='Y') return null;
+  const normalized=normalizeBitrix(event);
+  if (!occurrence || event.RECURRENCE_ID) {
+    if (normalized.id!==id) throw new Error('Идентичность вхождения Битрикса изменилась');
+    return normalized;
+  }
+  // getbyid returns the series definition, not the requested date. Let Bitrix expand it.
+  const date=occurrence[2];
+  const rows=await events(sectionId,date,date);
+  const found=rows.map(normalizeBitrix).find(e=>e.id===id);
+  if (found) return found;
+  if (String(event.EXDATE||'').split(';').some(d=>bitrixOccurrenceKey(d)===date)) return null;
+  throw new Error('Битрикс24 не подтвердил отмену вхождения. Копия сохранена');
 }
 
 export async function deleteBitrix(event, sectionId) {
   const current = await lookupBitrix(event.id, sectionId);
   if (!current) return;
-  if (current.unsupported || current.isMeeting || fingerprint(current)!==fingerprint(event)) throw new Error('Событие изменилось перед удалением. Обновите проверку');
+  if (current.unsupported || current.sourceOnly || current.isMeeting || fingerprint(current)!==fingerprint(event)) throw new Error('Событие изменилось перед удалением. Обновите проверку');
   const result = await b24('calendar.event.delete', {id:Number(event.id)});
   if (result !== true) throw new Error('Битрикс24 не подтвердил удаление события');
 }
@@ -75,11 +95,14 @@ function eventTimestamp(event, edge) {
 export function normalizeBitrix(event) {
   const start = eventTimestamp(event, 'FROM');
   const end = eventTimestamp(event, 'TO');
+  const sourceOnly=!!(event.RRULE || event.RECURRENCE_ID);
+  const key=sourceOnly ? bitrixOccurrenceKey(event.ORIGINAL_DATE_FROM || event.DATE_FROM) : null;
   const unsupported = event.DT_SKIP_TIME === 'Y' ? 'Событие на весь день пока не переносится'
-    : event.RRULE || event.RECURRENCE_ID || !Number.isFinite(start) || !Number.isFinite(end)
-      ? 'Повторяющееся или некорректное событие' : null;
+    : !Number.isFinite(start) || !Number.isFinite(end) || sourceOnly && !key
+      ? 'Некорректное событие Битрикс24' : start%60000 || end%60000 ? 'Событие с секундами пока не переносится' : null;
   return {
-    side: 'bitrix', id: String(event.ID), title: event.NAME || '', start, end,
+    side: 'bitrix', id:sourceOnly && key ? `${event.RECURRENCE_ID || event.ID}#occurrence=${key}` : String(event.ID), title: event.NAME || '', start, end,
+    sourceOnly, sourceRecordId:String(event.ID),
     allDay: event.DT_SKIP_TIME === 'Y', location: typeof event.LOCATION === 'string' ? event.LOCATION : '',
     isMeeting: event.IS_MEETING === true || event.IS_MEETING === 'Y', unsupported,
   };
@@ -100,6 +123,7 @@ export async function createBitrix(event, sectionId) {
 }
 
 export async function updateBitrix(id, event, sectionId) {
+  if (!/^\d+$/.test(String(id))) throw new Error('Копия повтора Битрикса доступна только для чтения');
   const user = account().user;
   await b24('calendar.event.update', { id: Number(id), ...fields(event, sectionId, user) });
 }

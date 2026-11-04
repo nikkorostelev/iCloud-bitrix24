@@ -32,7 +32,7 @@ export async function reconcileMissing(bitrix, apple, pairs, services, from, to)
   });
   for (const pair of candidates) {
     if (!byB.has(pair.bitrixId)) {
-      const event=await services.lookupBitrix(pair.bitrixId);
+      const event=await services.lookupBitrix(pair.bitrixId,pair);
       if (event===null) deletedBitrixIds.add(pair.bitrixId);
       else if (event?.id===pair.bitrixId) byB.set(event.id,event);
       else throw new Error('Не удалось подтвердить состояние события Битрикса');
@@ -66,7 +66,7 @@ export async function snapshot({linkIds, revisions} = {}) {
     const apple = a.flatMap(object => expandApple(object, from, to));
     const cache=new Map();
     const verified=await reconcileMissing(bitrix,apple,(value.state.pairs||[]).filter(pair=>(pair.calendarLinkId||'legacy')===link.id),{
-      lookupBitrix:id=>lookupBitrix(id,link.bitrixId),lookupApple:id=>lookupApple(data.client,id,cache),
+      lookupBitrix:(id,pair)=>lookupBitrix(id,link.bitrixId,pair),lookupApple:id=>lookupApple(data.client,id,cache),
     },from,to);
     const actions = plan(verified.bitrix, verified.apple, verified.state).map(action => ({ ...action, calendarName: section.name, calendarLinkId: link.id }));
     return { link, calendar, bitrix:verified.bitrix, apple:verified.apple, actions };
@@ -99,7 +99,7 @@ export async function runSync(expectedPreview = null, overrides = {}) {
             const pair=action.pair;
             if (!(value.state.pairs||[]).some(p=>p.bitrixId===pair.bitrixId && p.appleUrl===pair.appleUrl && (p.calendarLinkId||'legacy')===group.link.id)) throw new Error('Связь удаляемого события изменилась');
             if (action.kind==='deleteApple') {
-              if (await providers.lookupBitrix(pair.bitrixId,group.link.bitrixId)) throw new Error('Событие Битрикса восстановлено; удаление отменено');
+              if (await providers.lookupBitrix(pair.bitrixId,group.link.bitrixId,pair)) throw new Error('Событие Битрикса восстановлено; удаление отменено');
               await providers.deleteApple(data.client,byA.get(pair.appleUrl));
             }
             if (action.kind==='deleteBitrix') {
@@ -114,10 +114,10 @@ export async function runSync(expectedPreview = null, overrides = {}) {
           }
           let b, a;
           if (action.kind === 'link') { b = byB.get(action.source.id); a = byA.get(action.target.id); }
-          if (action.kind === 'createApple') { b = byB.get(action.source.id); a = { ...b, side: 'apple', id: await providers.createApple(data.client, group.calendar, b) }; }
-          if (action.kind === 'createBitrix') { a = byA.get(action.source.id); b = { ...a, side: 'bitrix', id: await providers.createBitrix(a, group.link.bitrixId) }; }
-          if (action.kind === 'updateApple') { b = byB.get(action.source.id); const target = byA.get(action.target.id); await providers.updateApple(data.client, target, b); a = { ...b, side: 'apple', id: target.id }; }
-          if (action.kind === 'updateBitrix') { a = byA.get(action.source.id); const target = byB.get(action.target.id); await providers.updateBitrix(target.id, a, group.link.bitrixId); b = { ...a, side: 'bitrix', id: target.id }; }
+          if (action.kind === 'createApple') { b = byB.get(action.source.id); a = { ...b, side: 'apple', sourceOnly:false, id: await providers.createApple(data.client, group.calendar, b) }; }
+          if (action.kind === 'createBitrix') { a = byA.get(action.source.id); b = { ...a, side: 'bitrix', sourceOnly:false, id: await providers.createBitrix(a, group.link.bitrixId) }; }
+          if (action.kind === 'updateApple') { b = byB.get(action.source.id); const target = byA.get(action.target.id); await providers.updateApple(data.client, target, b); a = { ...b, side: 'apple', sourceOnly:false, id: target.id }; }
+          if (action.kind === 'updateBitrix') { a = byA.get(action.source.id); const target = byB.get(action.target.id); await providers.updateBitrix(target.id, a, group.link.bitrixId); b = { ...a, side: 'bitrix', sourceOnly:false, id: target.id }; }
           const scoped = { pairs: (value.state.pairs || []).filter(pair => (pair.calendarLinkId || 'legacy') === group.link.id) };
           upsertPair(scoped, b, a);
           value.state.pairs = [...(value.state.pairs || []).filter(pair => (pair.calendarLinkId || 'legacy') !== group.link.id), ...scoped.pairs.map(pair => ({ ...pair, calendarLinkId: group.link.id }))];

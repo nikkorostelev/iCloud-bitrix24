@@ -63,7 +63,7 @@ export async function backgroundRun(value, overrides = {}) {
       const eventIds = eventQueues.get(value.id);
       eventQueues.delete(value.id);
       for (const id of eventIds || []) {
-        const pair = value.state.pairs?.find(pair=>pair.bitrixId===id);
+        const pair = value.state.pairs?.find(pair=>pair.bitrixId===id || pair.bitrixRecordId===id || pair.bitrixId.startsWith(`${id}#occurrence=`));
         if (pair) { changed.add(pair.calendarLinkId || 'legacy'); continue; }
         try {
           const section = await services.eventSection(id);
