@@ -67,7 +67,9 @@ export async function lookupBitrix(id, sectionId, pair = {}) {
   const found=rows.map(normalizeBitrix).find(e=>e.id===id);
   if (found) return found;
   if (String(event.EXDATE||'').split(';').some(d=>bitrixOccurrenceKey(d)===date)) return null;
-  throw new Error('Битрикс24 не подтвердил отмену вхождения. Копия сохранена');
+  const until=bitrixOccurrenceKey(event.RRULE?.UNTIL);
+  if (until && date>until) return null;
+  return {...normalized,id,unsupported:'Битрикс24 не подтвердил отмену вхождения. Копия сохранена'};
 }
 
 export async function deleteBitrix(event, sectionId) {

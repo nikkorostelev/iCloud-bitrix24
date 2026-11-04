@@ -71,6 +71,17 @@ test('a known detached exception moved outside the query window is looked up by 
   });
 });
 
+test('ending a series confirms removal of later dates; unexplained omissions preserve the copy',async t=>{
+  let until='01.01.2038';
+  t.mock.method(globalThis,'fetch',async url=>({ok:true,status:200,json:async()=>({result:url.includes('calendar.event.getbyid')?{...row(),RRULE:{FREQ:'WEEKLY',UNTIL:until}}:[]})}));
+  await context.run(value('termination'),async()=>{
+    const unconfirmed=await lookupBitrix('10#occurrence=2026-11-12','2');
+    assert.match(unconfirmed.unsupported,/Копия сохранена/);
+    until='05.11.2026';
+    assert.equal(await lookupBitrix('10#occurrence=2026-11-12','2'),null);
+  });
+});
+
 test('synthetic IDs can never reach calendar.event.update or calendar.event.delete',async t=>{
   let deletes=0;
   t.mock.method(globalThis,'fetch',async url=>{
